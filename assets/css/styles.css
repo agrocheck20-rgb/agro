@@ -1,1 +1,7 @@
-html, body { scroll-behavior: smooth; } label{display:block;margin-bottom:4px}
+.navbtn{ text-align:left; padding:.6rem .75rem; border-radius:.75rem; border:1px solid transparent; }
+.navbtn:hover{ background:#f8fafc; border-color:#e2e8f0; }
+.card{ background:white; border:1px solid #e2e8f0; border-radius:1rem; padding:1rem; }
+.card-title{ font-weight:600; margin-bottom:.5rem; }
+.stat{ display:flex; flex-direction:column; gap:.25rem; }
+.stat-label{ font-size:.8rem; color:#64748b; }
+.stat-value{ font-size:1.6rem; font-weight:700; }
