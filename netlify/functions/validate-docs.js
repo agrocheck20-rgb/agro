@@ -1,30 +1,23 @@
-// netlify/functions/validate-docs.mjs
-import OpenAI from "openai";
-import { createClient } from "@supabase/supabase-js";
-import pdfParse from "pdf-parse";
-import PDFDocument from "pdfkit";
+// netlify/functions/validate-docs.js
+const PDFDocument = require("pdfkit"); // CJS puro
 
-/* Utilidad para responder JSON */
 function json(status, obj) {
   return {
     statusCode: status,
     headers: { "content-type": "application/json", "cache-control": "no-store" },
-    body: JSON.stringify(obj)
+    body: JSON.stringify(obj),
   };
 }
 
-/* Clientes */
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const supa = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
-
-/* Utils */
+// Utils
 async function fetchArrayBuffer(url) {
-  const r = await fetch(url);               // fetch nativo de Node 18
+  const r = await fetch(url); // fetch nativo Node 18
   if (!r.ok) throw new Error("No se pudo descargar archivo");
   const ab = await r.arrayBuffer();
   return Buffer.from(ab);
 }
 async function extractPdfTextFromSignedUrl(signedUrl) {
+  const { default: pdfParse } = await import("pdf-parse");
   const buf = await fetchArrayBuffer(signedUrl);
   const res = await pdfParse(buf);
   return res?.text || "";
@@ -57,6 +50,7 @@ async function generateCertificatePDF(payload) {
     line("Destino:", payload.destino);
     line("Fecha de emisión:", payload.fecha);
     line("Estado:", "APROBADO");
+
     doc.moveDown().font("Times-Bold").text("Observaciones:");
     doc.font("Times-Roman").text(payload.observaciones || "Sin observaciones");
     doc.moveDown().font("Times-Italic").fontSize(10)
@@ -65,7 +59,7 @@ async function generateCertificatePDF(payload) {
   });
 }
 
-/* JSON Schema (Structured Outputs) */
+// Schema para Structured Outputs (Responses API)
 const validationSchema = {
   name: "ValidationResult",
   schema: {
@@ -86,16 +80,16 @@ const validationSchema = {
                 type: "object",
                 properties: {
                   field: { type: "string" },
-                  reason: { type: "string" }
+                  reason: { type: "string" },
                 },
                 required: ["reason"],
-                additionalProperties: false
-              }
-            }
+                additionalProperties: false,
+              },
+            },
           },
           required: ["doc_type", "required", "status"],
-          additionalProperties: false
-        }
+          additionalProperties: false,
+        },
       },
       per_doc_fields: {
         type: "object",
@@ -107,12 +101,12 @@ const validationSchema = {
               field: { type: "string" },
               value: { type: "string" },
               confidence: { type: "number" },
-              comment: { type: "string" }
+              comment: { type: "string" },
             },
             required: ["field"],
-            additionalProperties: false
-          }
-        }
+            additionalProperties: false,
+          },
+        },
       },
       narrative: {
         type: "array",
@@ -120,16 +114,16 @@ const validationSchema = {
           type: "object",
           properties: {
             role: { type: "string", enum: ["assistant"] },
-            text: { type: "string" }
+            text: { type: "string" },
           },
-          required: ["role","text"],
-          additionalProperties: false
-        }
-      }
+          required: ["role", "text"],
+          additionalProperties: false,
+        },
+      },
     },
     required: ["decision", "checklist"],
-    additionalProperties: false
-  }
+    additionalProperties: false,
+  },
 };
 
 const SYSTEM_PROMPT = `
@@ -141,13 +135,19 @@ Devuelve SOLO JSON conforme al schema:
 - narrative: 3–6 mensajes breves explicando el proceso.
 `;
 
-/* Netlify handler (ESM) */
-export async function handler(event, context) {
+// ===== Netlify Function (CommonJS) =====
+exports.handler = async (event, context) => {
   try {
+    // Cargar ESM dentro del handler
+    const { default: OpenAI } = await import("openai");
+    const { createClient } = await import("@supabase/supabase-js");
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const supa = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
+
     const qs = event.queryStringParameters || {};
     const lotId =
       qs.lot_id ||
-      (event.httpMethod === "POST" ? (JSON.parse(event.body || "{}").lot_id) : null);
+      (event.httpMethod === "POST" ? JSON.parse(event.body || "{}").lot_id : null);
     if (!lotId) return json(400, { error: "Falta lot_id" });
 
     // 1) Lote y perfil
@@ -162,13 +162,13 @@ export async function handler(event, context) {
     if (!reqs || reqs.length === 0) {
       const { data: def } = await supa.from("required_docs")
         .select("doc_type").eq("default_required", true);
-      reqs = (def || []).map(d => ({ doc_type: d.doc_type, required: true }));
+      reqs = (def || []).map((d) => ({ doc_type: d.doc_type, required: true }));
     }
 
     // 3) Documentos
     const { data: docs } = await supa.from("documents").select("*").eq("lot_id", lotId);
     const byType = {};
-    for (const d of (docs || [])) (byType[d.doc_type] ||= []).push(d);
+    for (const d of docs || []) (byType[d.doc_type] ||= []).push(d);
 
     // 4) Plantillas
     const { data: templates } = await supa.from("doc_templates").select("*");
@@ -187,8 +187,11 @@ export async function handler(event, context) {
         if (!signed?.signedUrl) continue;
         files.push({ path: row.file_path, url: signed.signedUrl });
         if (row.file_path.toLowerCase().endsWith(".pdf")) {
-          try { fullText += `\n[${row.file_path}]\n${await extractPdfTextFromSignedUrl(signed.signedUrl)}\n`; }
-          catch { fullText += `\n[${row.file_path}] (no fue posible extraer texto)\n`; }
+          try {
+            fullText += `\n[${row.file_path}]\n${await extractPdfTextFromSignedUrl(signed.signedUrl)}\n`;
+          } catch {
+            fullText += `\n[${row.file_path}] (no fue posible extraer texto)\n`;
+          }
         }
       }
       perDocEvidence[t] = { files, text: fullText.trim() };
@@ -199,15 +202,15 @@ export async function handler(event, context) {
       lote: {
         product: lot.product, variety: lot.variety, lot_code: lot.lot_code,
         origin_region: lot.origin_region, origin_province: lot.origin_province,
-        destination_country: lot.destination_country
+        destination_country: lot.destination_country,
       },
       requirements: reqs,
-      templates: (templates || []).map(t => ({
+      templates: (templates || []).map((t) => ({
         doc_type: t.doc_type,
         required_fields: t.required_fields,
-        rules: t.rules || {}
+        rules: t.rules || {},
       })),
-      evidence: perDocEvidence
+      evidence: perDocEvidence,
     };
 
     // 7) OpenAI (Structured Outputs)
@@ -215,9 +218,9 @@ export async function handler(event, context) {
       model: "gpt-4o-mini",
       input: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: [{ type: "text", text: JSON.stringify(contextPayload) }] }
+        { role: "user", content: [{ type: "text", text: JSON.stringify(contextPayload) }] },
       ],
-      response_format: { type: "json_schema", json_schema: validationSchema }
+      response_format: { type: "json_schema", json_schema: validationSchema },
     });
 
     let parsed = {};
@@ -225,16 +228,16 @@ export async function handler(event, context) {
       const raw = response.output?.[0]?.content?.[0]?.text || "{}";
       parsed = JSON.parse(raw);
     } catch {
-      parsed = { decision: "pendiente", checklist: [], narrative: [{role:"assistant", text:"No se pudo parsear la respuesta JSON"}] };
+      parsed = { decision: "pendiente", checklist: [], narrative: [{ role: "assistant", text: "No se pudo parsear la respuesta JSON" }] };
     }
 
-    // 8) Actualizar lote y certificados
+    // 8) Actualizar lote / certificado
     const approved = parsed.decision === "aprobado";
     const status = parsed.decision;
 
     const observations = (parsed.checklist || [])
-      .filter(i => (i.issues || []).length > 0)
-      .map(i => `${i.doc_type}: ${i.issues.map(x => (x.field ? `${x.field} - ${x.reason}` : x.reason)).join("; ")}`)
+      .filter((i) => (i.issues || []).length > 0)
+      .map((i) => `${i.doc_type}: ${i.issues.map((x) => (x.field ? `${x.field} - ${x.reason}` : x.reason)).join("; ")}`)
       .join(" | ");
 
     let certificate_path = null;
@@ -248,13 +251,13 @@ export async function handler(event, context) {
         origen: `${lot.origin_region || "-"}, ${lot.origin_province || "-"}`,
         destino: lot.destination_country,
         fecha: new Date().toLocaleDateString(),
-        observaciones: observations || ""
+        observaciones: observations || "",
       };
       const pdfBuffer = await generateCertificatePDF(certPayload);
       const path = `${lot.user_id}/${lot.id}/cert_${Date.now()}.pdf`;
       const { error: upErr } = await supa.storage.from("certs").upload(path, pdfBuffer, {
         contentType: "application/pdf",
-        upsert: true
+        upsert: true,
       });
       if (!upErr) certificate_path = path;
     }
@@ -274,11 +277,11 @@ export async function handler(event, context) {
 
     // 9) Stages para UI
     const stages = [
-      { step: "lectura",     label: "Lectura de documentos",      status: "done" },
-      { step: "extraccion",  label: "Extracción de campos",       status: "done" },
-      { step: "validacion",  label: "Validación de reglas",       status: "done" },
-      { step: "decision",    label: "Decisión del lote",          status: "done" },
-      { step: "resultado",   label: "Preparando resultado final", status: "done" }
+      { step: "lectura", label: "Lectura de documentos", status: "done" },
+      { step: "extraccion", label: "Extracción de campos", status: "done" },
+      { step: "validacion", label: "Validación de reglas", status: "done" },
+      { step: "decision", label: "Decisión del lote", status: "done" },
+      { step: "resultado", label: "Preparando resultado final", status: "done" },
     ];
 
     return json(200, {
@@ -289,11 +292,11 @@ export async function handler(event, context) {
       narrative: parsed.narrative || [],
       stages,
       observations,
-      certificate_path
+      certificate_path,
     });
-
   } catch (err) {
     console.error("validate-docs error:", err);
     return json(500, { error: "Error en validación IA", details: String(err) });
   }
-}
+};
+
