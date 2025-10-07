@@ -82,51 +82,17 @@ const validationSchema = {
                   field: { type: "string" },
                   reason: { type: "string" }
                 },
-                // ← REQUIRED debe incluir TODAS las keys
                 required: ["field", "reason"],
                 additionalProperties: false
               }
             }
           },
-          // ← REQUIRED debe incluir TODAS las keys del item
           required: ["doc_type", "required", "status", "issues"],
-          additionalProperties: false
-        }
-      },
-      per_doc_fields: {
-        type: "object",
-        additionalProperties: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              field: { type: "string" },
-              value: { type: "string" },
-              confidence: { type: "number" },
-              comment: { type: "string" }
-            },
-            // ← para evitar el mismo error, marcamos todas como requeridas
-            required: ["field", "value", "confidence", "comment"],
-            additionalProperties: false
-          }
-        }
-      },
-      narrative: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            role: { type: "string", enum: ["assistant"] },
-            text: { type: "string" }
-          },
-          // ← todas las keys requeridas
-          required: ["role", "text"],
           additionalProperties: false
         }
       }
     },
-    // ← TOP-LEVEL: requerimos TODAS las propiedades declaradas
-    required: ["decision", "checklist", "per_doc_fields", "narrative"],
+    required: ["decision", "checklist"],
     additionalProperties: false
   }
 };
@@ -240,35 +206,27 @@ if (!Array.isArray(templates) || templates.length === 0) {
     const response = await openai.responses.create({
   model: "gpt-4o-mini",
   input: [
-    {
-      role: "system",
-      content: [{ type: "input_text", text: SYSTEM_PROMPT }]
-    },
-    {
-      role: "user",
-      content: [{ type: "input_text", text: JSON.stringify(contextPayload) }]
-    }
+    { role: "system", content: [{ type: "input_text", text: SYSTEM_PROMPT }] },
+    { role: "user",   content: [{ type: "input_text", text: JSON.stringify(contextPayload) }] }
   ],
   text: {
     format: {
-      // ← ahora todo va DIRECTO en format (sin json_schema anidado)
       type: "json_schema",
-      name: validationSchema.name,            // "ValidationResult"
-      schema: validationSchema.schema,        // ← el objeto de schema
+      name: validationSchema.name,
+      schema: validationSchema.schema,
       strict: true
     }
   }
 });
 
-
-    
-    let parsed = {};
+let parsed = {};
 try {
   const raw = response.output_text ?? (response.output?.[0]?.content?.[0]?.text) ?? "{}";
   parsed = JSON.parse(raw);
-} catch (e) {
-  parsed = { decision: "pendiente", checklist: [], narrative: [{ role: "assistant", text: "No se pudo parsear la respuesta JSON" }] };
+} catch {
+  parsed = { decision: "pendiente", checklist: [] };
 }
+
 
 
 
