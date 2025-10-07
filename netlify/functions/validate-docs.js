@@ -234,8 +234,14 @@ if (!Array.isArray(templates) || templates.length === 0) {
     const response = await openai.responses.create({
   model: "gpt-4o-mini",
   input: [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: [{ type: "text", text: JSON.stringify(contextPayload) }] }
+    {
+      role: "system",
+      content: [{ type: "input_text", text: SYSTEM_PROMPT }]
+    },
+    {
+      role: "user",
+      content: [{ type: "input_text", text: JSON.stringify(contextPayload) }]
+    }
   ],
   text: {
     format: {
@@ -248,14 +254,13 @@ if (!Array.isArray(templates) || templates.length === 0) {
     }
   }
 });
-
-
+    
     let parsed = {};
 try {
   const raw = response.output_text ?? (response.output?.[0]?.content?.[0]?.text) ?? "{}";
   parsed = JSON.parse(raw);
 } catch (e) {
-  parsed = { decision: "pendiente", checklist: [], narrative: [{ role:"assistant", text:"No se pudo parsear la respuesta JSON" }] };
+  parsed = { decision: "pendiente", checklist: [], narrative: [{ role: "assistant", text: "No se pudo parsear la respuesta JSON" }] };
 }
 
 
