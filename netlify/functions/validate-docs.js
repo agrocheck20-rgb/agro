@@ -245,15 +245,18 @@ if (!Array.isArray(templates) || templates.length === 0) {
   ],
   text: {
     format: {
+      // 👇 'name' es obligatorio
+      name: validationSchema.name,                 // "ValidationResult"
       type: "json_schema",
       json_schema: {
-        name: validationSchema.name,
+        // 👇 aquí va SOLO el schema, sin 'name'
         schema: validationSchema.schema,
         strict: true
       }
     }
   }
 });
+
     
     let parsed = {};
 try {
@@ -262,6 +265,7 @@ try {
 } catch (e) {
   parsed = { decision: "pendiente", checklist: [], narrative: [{ role: "assistant", text: "No se pudo parsear la respuesta JSON" }] };
 }
+
 
 
     // 8) Actualizar lote / certificado
