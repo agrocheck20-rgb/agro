@@ -314,9 +314,20 @@ document.getElementById("btnRunAI")?.addEventListener("click", async ()=>{
 
   try {
     const r = await fetch("/.netlify/functions/validate-docs?lot_id="+encodeURIComponent(state.currentLotId));
-    const data = await r.json();
-    chatTyping(false);
-    if (!r.ok) throw new Error(data?.error || "Error IA");
+let data = {};
+try { data = await r.json(); } catch {}
+chatTyping(false);
+
+if (!r.ok) {
+  console.error("IA error:", data);
+  const detail = [data?.error, data?.details].filter(Boolean).join(" — ");
+  chatAdd("assistant", "Error del servidor: " + (detail || r.status));
+  document.getElementById("aiResults").textContent = "Error: " + (detail || "Fallo desconocido");
+  toast("Error IA: " + (data?.error || r.status), false);
+  btn.disabled = false; btn.textContent = "Validar con IA ahora";
+  return;
+}
+
 
     // Animar pipeline
     const order = (data.stages||[]).map(s=>s.step);
