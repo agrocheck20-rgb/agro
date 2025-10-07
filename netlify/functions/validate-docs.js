@@ -245,17 +245,15 @@ if (!Array.isArray(templates) || templates.length === 0) {
   ],
   text: {
     format: {
-      // 👇 'name' es obligatorio
-      name: validationSchema.name,                 // "ValidationResult"
+      // ← ahora todo va DIRECTO en format (sin json_schema anidado)
       type: "json_schema",
-      json_schema: {
-        // 👇 aquí va SOLO el schema, sin 'name'
-        schema: validationSchema.schema,
-        strict: true
-      }
+      name: validationSchema.name,            // "ValidationResult"
+      schema: validationSchema.schema,        // ← el objeto de schema
+      strict: true
     }
   }
 });
+
 
     
     let parsed = {};
