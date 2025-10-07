@@ -43,12 +43,19 @@ exports.handler = async (event, context) => {
     };
 
     const r = await openai.responses.create({
-      model: "gpt-4o-mini",
-      input: [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: [{ type: "text", text: `Contexto: ${JSON.stringify(contextPayload)}\n\nPregunta: ${message}` }] },
-      ],
-    });
+  model: "gpt-4o-mini",
+  input: [
+    { role: "system", content: [{ type: "input_text", text: SYSTEM }] },
+    {
+      role: "user",
+      content: [{
+        type: "input_text",
+        text: `Contexto: ${JSON.stringify(contextPayload)}\n\nPregunta: ${message}`
+      }]
+    }
+  ]
+});
+
 
     const text = r.output?.[0]?.content?.[0]?.text || "No tengo respuesta en este momento.";
     return json(200, { ok: true, text });
