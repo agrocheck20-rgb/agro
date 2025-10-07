@@ -80,16 +80,18 @@ const validationSchema = {
                 type: "object",
                 properties: {
                   field: { type: "string" },
-                  reason: { type: "string" },
+                  reason: { type: "string" }
                 },
-                required: ["reason"],
-                additionalProperties: false,
-              },
-            },
+                // ← REQUIRED debe incluir TODAS las keys
+                required: ["field", "reason"],
+                additionalProperties: false
+              }
+            }
           },
-          required: ["doc_type", "required", "status"],
-          additionalProperties: false,
-        },
+          // ← REQUIRED debe incluir TODAS las keys del item
+          required: ["doc_type", "required", "status", "issues"],
+          additionalProperties: false
+        }
       },
       per_doc_fields: {
         type: "object",
@@ -101,12 +103,13 @@ const validationSchema = {
               field: { type: "string" },
               value: { type: "string" },
               confidence: { type: "number" },
-              comment: { type: "string" },
+              comment: { type: "string" }
             },
-            required: ["field"],
-            additionalProperties: false,
-          },
-        },
+            // ← para evitar el mismo error, marcamos todas como requeridas
+            required: ["field", "value", "confidence", "comment"],
+            additionalProperties: false
+          }
+        }
       },
       narrative: {
         type: "array",
@@ -114,17 +117,20 @@ const validationSchema = {
           type: "object",
           properties: {
             role: { type: "string", enum: ["assistant"] },
-            text: { type: "string" },
+            text: { type: "string" }
           },
+          // ← todas las keys requeridas
           required: ["role", "text"],
-          additionalProperties: false,
-        },
-      },
+          additionalProperties: false
+        }
+      }
     },
-    required: ["decision", "checklist"],
-    additionalProperties: false,
-  },
+    // ← TOP-LEVEL: requerimos TODAS las propiedades declaradas
+    required: ["decision", "checklist", "per_doc_fields", "narrative"],
+    additionalProperties: false
+  }
 };
+
 
 const SYSTEM_PROMPT = `
 Eres un asistente de validación documental para exportaciones agroindustriales.
