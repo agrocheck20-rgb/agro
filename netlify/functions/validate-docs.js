@@ -232,21 +232,32 @@ if (!Array.isArray(templates) || templates.length === 0) {
 
     // 7) OpenAI (Structured Outputs)
     const response = await openai.responses.create({
-      model: "gpt-4o-mini",
-      input: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: [{ type: "text", text: JSON.stringify(contextPayload) }] },
-      ],
-      response_format: { type: "json_schema", json_schema: validationSchema },
-    });
+  model: "gpt-4o-mini",
+  input: [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: [{ type: "text", text: JSON.stringify(contextPayload) }] }
+  ],
+  text: {
+    format: {
+      type: "json_schema",
+      json_schema: {
+        name: validationSchema.name,
+        schema: validationSchema.schema,
+        strict: true
+      }
+    }
+  }
+});
+
 
     let parsed = {};
-    try {
-      const raw = response.output?.[0]?.content?.[0]?.text || "{}";
-      parsed = JSON.parse(raw);
-    } catch {
-      parsed = { decision: "pendiente", checklist: [], narrative: [{ role: "assistant", text: "No se pudo parsear la respuesta JSON" }] };
-    }
+try {
+  const raw = response.output_text ?? (response.output?.[0]?.content?.[0]?.text) ?? "{}";
+  parsed = JSON.parse(raw);
+} catch (e) {
+  parsed = { decision: "pendiente", checklist: [], narrative: [{ role:"assistant", text:"No se pudo parsear la respuesta JSON" }] };
+}
+
 
     // 8) Actualizar lote / certificado
     const approved = parsed.decision === "aprobado";
