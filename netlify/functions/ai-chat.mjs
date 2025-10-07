@@ -1,4 +1,4 @@
-// netlify/functions/ai-chat.js
+// netlify/functions/ai-chat.mjs
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
@@ -14,8 +14,8 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const supa = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
 
 const SYSTEM = `
-Eres el asistente IA de AgroCheck. Explicas lo que haces, respondes dudas del exportador
-y sugieres cómo corregir documentos. Sé breve, claro y específico para agroexportaciones.
+Eres el asistente IA de AgroCheck. Explicas lo que haces, respondes dudas
+y sugieres cómo corregir documentos. Sé breve, claro y específico.
 `;
 
 export async function handler(event, context) {
@@ -57,4 +57,3 @@ export async function handler(event, context) {
     return json(500, { error:"Fallo chat IA" });
   }
 }
-
