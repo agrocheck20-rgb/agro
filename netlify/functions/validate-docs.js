@@ -156,14 +156,23 @@ exports.handler = async (event, context) => {
     const { data: profile } = await supa.from("profiles").select("*").eq("id", lot.user_id).single();
 
     // 2) Requisitos
-    let { data: reqs } = await supa.from("doc_requirements")
-      .select("doc_type, required")
-      .eq("product", lot.product).eq("country_code", lot.destination_country);
-    if (!reqs || reqs.length === 0) {
-      const { data: def } = await supa.from("required_docs")
-        .select("doc_type").eq("default_required", true);
-      reqs = (def || []).map((d) => ({ doc_type: d.doc_type, required: true }));
-    }
+    let { data: reqs, error: reqErr } = await supa.from("doc_requirements")
+  .select("doc_type, required")
+  .eq("product", lot.product).eq("country_code", lot.destination_country);
+
+if (!Array.isArray(reqs) || reqs.length === 0) {
+  let def = [];
+  try {
+    const r = await supa.from("required_docs").select("doc_type").eq("default_required", true);
+    def = r.data || [];
+  } catch {}
+  reqs = (def.length ? def.map(d => ({ doc_type: d.doc_type, required: true })) : [
+    { doc_type: "FITO", required: true },
+    { doc_type: "REG_SAN", required: true },
+    { doc_type: "FORM_EXP", required: true },
+  ]);
+}
+
 
     // 3) Documentos
     const { data: docs } = await supa.from("documents").select("*").eq("lot_id", lotId);
@@ -171,7 +180,15 @@ exports.handler = async (event, context) => {
     for (const d of docs || []) (byType[d.doc_type] ||= []).push(d);
 
     // 4) Plantillas
-    const { data: templates } = await supa.from("doc_templates").select("*");
+    let { data: templates } = await supa.from("doc_templates").select("*");
+if (!Array.isArray(templates) || templates.length === 0) {
+  templates = [
+    { doc_type: "FITO", required_fields: ["exporter_name","exporter_ruc","product","variety","lot_code","origin_region","destination_country","issue_date","signature"], rules: {} },
+    { doc_type: "REG_SAN", required_fields: ["holder_name","ruc","product","batch","valid_until","signature"], rules: {} },
+    { doc_type: "FORM_EXP", required_fields: ["exporter_name","ruc","product","hs_code","quantity","unit","destination_country","port","incoterm","invoice_number","date","signature"], rules: {} },
+  ];
+}
+
 
     // 5) Evidencias (texto PDFs)
     const perDocEvidence = {};
