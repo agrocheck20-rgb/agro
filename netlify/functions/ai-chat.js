@@ -2,23 +2,28 @@
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
+function json(status, obj) {
+  return {
+    statusCode: status,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    body: JSON.stringify(obj)
+  };
+}
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const supa = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
 
 const SYSTEM = `
-Eres el asistente IA de AgroCheck. Explicas lo que estás haciendo, respondes dudas del exportador,
+Eres el asistente IA de AgroCheck. Explicas lo que haces, respondes dudas del exportador
 y sugieres cómo corregir documentos. Sé breve, claro y específico para agroexportaciones.
 `;
 
-export default async (req, res) => {
+export async function handler(event, context) {
   try {
-    if (req.method !== "POST") return res.status(405).json({ error: "Use POST" });
-    const body = await new Promise((resolve) => {
-      let data = ""; req.on("data", (c)=> data += c);
-      req.on("end", ()=> resolve(JSON.parse(data||"{}")));
-    });
+    if (event.httpMethod !== "POST") return json(405, { error: "Use POST" });
+    const body = JSON.parse(event.body || "{}");
     const { lot_id, message } = body;
-    if (!lot_id || !message) return res.status(400).json({ error:"Falta lot_id o message" });
+    if (!lot_id || !message) return json(400, { error: "Falta lot_id o message" });
 
     const { data: lot } = await supa.from("lots").select("*").eq("id", lot_id).single();
     let { data: reqs } = await supa.from("doc_requirements").select("doc_type, required")
@@ -28,7 +33,7 @@ export default async (req, res) => {
       reqs = (def||[]).map(d=>({ doc_type: d.doc_type, required: true }));
     }
 
-    const context = {
+    const contextPayload = {
       lote: {
         product: lot.product, variety: lot.variety, lot_code: lot.lot_code,
         destination_country: lot.destination_country
@@ -40,13 +45,16 @@ export default async (req, res) => {
       model: "gpt-4o-mini",
       input: [
         { role: "system", content: SYSTEM },
-        { role: "user", content: [{ type:"text", text: `Contexto: ${JSON.stringify(context)}\n\nPregunta: ${message}` }] }
+        { role: "user", content: [{ type:"text", text: `Contexto: ${JSON.stringify(contextPayload)}\n\nPregunta: ${message}` }] }
       ]
     });
+
     const text = r.output?.[0]?.content?.[0]?.text || "No tengo respuesta en este momento.";
-    return res.status(200).json({ ok:true, text });
+    return json(200, { ok:true, text });
+
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error:"Fallo chat IA" });
+    console.error("ai-chat error:", e);
+    return json(500, { error:"Fallo chat IA" });
   }
-};
+}
+
