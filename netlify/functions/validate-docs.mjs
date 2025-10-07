@@ -1,11 +1,10 @@
-// netlify/functions/validate-docs.js
+// netlify/functions/validate-docs.mjs
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
-import fetch from "node-fetch";
 import pdfParse from "pdf-parse";
 import PDFDocument from "pdfkit";
 
-// ---------- Helpers de respuesta JSON ----------
+/* Utilidad para responder JSON */
 function json(status, obj) {
   return {
     statusCode: status,
@@ -14,13 +13,13 @@ function json(status, obj) {
   };
 }
 
-// ---------- Clientes ----------
+/* Clientes */
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const supa = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
 
-// ---------- Utils ----------
+/* Utils */
 async function fetchArrayBuffer(url) {
-  const r = await fetch(url);
+  const r = await fetch(url);               // fetch nativo de Node 18
   if (!r.ok) throw new Error("No se pudo descargar archivo");
   const ab = await r.arrayBuffer();
   return Buffer.from(ab);
@@ -43,12 +42,10 @@ async function generateCertificatePDF(payload) {
     );
     doc.moveDown();
     doc.fontSize(12).font("Times-Roman");
-
     const line = (label, value) => {
       doc.font("Times-Bold").text(label, { continued: true })
          .font("Times-Roman").text(" " + (value ?? "-"));
     };
-
     doc.moveDown();
     line("Certificado Nº:", payload.certificate_number ?? "—");
     line("Empresa:", payload.empresa);
@@ -60,17 +57,15 @@ async function generateCertificatePDF(payload) {
     line("Destino:", payload.destino);
     line("Fecha de emisión:", payload.fecha);
     line("Estado:", "APROBADO");
-
     doc.moveDown().font("Times-Bold").text("Observaciones:");
     doc.font("Times-Roman").text(payload.observaciones || "Sin observaciones");
-
     doc.moveDown().font("Times-Italic").fontSize(10)
        .text("Documento generado por AgroCheck.");
     doc.end();
   });
 }
 
-// ---------- JSON Schema para Structured Outputs ----------
+/* JSON Schema (Structured Outputs) */
 const validationSchema = {
   name: "ValidationResult",
   schema: {
@@ -139,48 +134,46 @@ const validationSchema = {
 
 const SYSTEM_PROMPT = `
 Eres un asistente de validación documental para exportaciones agroindustriales.
-Con requisitos por doc_type, texto OCR y datos del lote, devuelve JSON (schema) con:
+Devuelve SOLO JSON conforme al schema:
 - decision del lote ("aprobado"|"rechazado"|"pendiente"),
-- checklist por doc_type (status ok/faltante/observado + issues),
-- per_doc_fields (campos detectados con valor/confianza/coment),
-- narrative (3–6 mensajes cortos explicando el proceso).
-Solo JSON.
+- checklist por doc_type (ok/faltante/observado + issues),
+- per_doc_fields: campos detectados con valor/confianza/comentario,
+- narrative: 3–6 mensajes breves explicando el proceso.
 `;
 
-// ---------- Handler Netlify ----------
+/* Netlify handler (ESM) */
 export async function handler(event, context) {
   try {
-    // 0) Obtener lot_id de query o body
     const qs = event.queryStringParameters || {};
     const lotId =
       qs.lot_id ||
       (event.httpMethod === "POST" ? (JSON.parse(event.body || "{}").lot_id) : null);
-
     if (!lotId) return json(400, { error: "Falta lot_id" });
 
-    // 1) Cargar lote y perfil
+    // 1) Lote y perfil
     const { data: lot, error: eLot } = await supa.from("lots").select("*").eq("id", lotId).single();
     if (eLot || !lot) return json(404, { error: "Lote no encontrado" });
     const { data: profile } = await supa.from("profiles").select("*").eq("id", lot.user_id).single();
 
-    // 2) Requisitos (específicos o defaults)
+    // 2) Requisitos
     let { data: reqs } = await supa.from("doc_requirements")
       .select("doc_type, required")
       .eq("product", lot.product).eq("country_code", lot.destination_country);
     if (!reqs || reqs.length === 0) {
-      const { data: def } = await supa.from("required_docs").select("doc_type").eq("default_required", true);
+      const { data: def } = await supa.from("required_docs")
+        .select("doc_type").eq("default_required", true);
       reqs = (def || []).map(d => ({ doc_type: d.doc_type, required: true }));
     }
 
-    // 3) Documentos del lote
+    // 3) Documentos
     const { data: docs } = await supa.from("documents").select("*").eq("lot_id", lotId);
     const byType = {};
     for (const d of (docs || [])) (byType[d.doc_type] ||= []).push(d);
 
-    // 4) Plantillas/campos obligatorios
+    // 4) Plantillas
     const { data: templates } = await supa.from("doc_templates").select("*");
 
-    // 5) Evidencias por doc (OCR de PDFs)
+    // 5) Evidencias (texto PDFs)
     const perDocEvidence = {};
     for (const r of reqs) {
       const t = r.doc_type;
@@ -189,12 +182,10 @@ export async function handler(event, context) {
 
       const files = [];
       let fullText = "";
-
       for (const row of rows) {
         const { data: signed } = await supa.storage.from("docs").createSignedUrl(row.file_path, 60);
         if (!signed?.signedUrl) continue;
         files.push({ path: row.file_path, url: signed.signedUrl });
-
         if (row.file_path.toLowerCase().endsWith(".pdf")) {
           try { fullText += `\n[${row.file_path}]\n${await extractPdfTextFromSignedUrl(signed.signedUrl)}\n`; }
           catch { fullText += `\n[${row.file_path}] (no fue posible extraer texto)\n`; }
@@ -203,7 +194,7 @@ export async function handler(event, context) {
       perDocEvidence[t] = { files, text: fullText.trim() };
     }
 
-    // 6) Contexto para el modelo
+    // 6) Contexto para IA
     const contextPayload = {
       lote: {
         product: lot.product, variety: lot.variety, lot_code: lot.lot_code,
@@ -237,7 +228,7 @@ export async function handler(event, context) {
       parsed = { decision: "pendiente", checklist: [], narrative: [{role:"assistant", text:"No se pudo parsear la respuesta JSON"}] };
     }
 
-    // 8) Decisión y actualización DB
+    // 8) Actualizar lote y certificados
     const approved = parsed.decision === "aprobado";
     const status = parsed.decision;
 
@@ -261,7 +252,10 @@ export async function handler(event, context) {
       };
       const pdfBuffer = await generateCertificatePDF(certPayload);
       const path = `${lot.user_id}/${lot.id}/cert_${Date.now()}.pdf`;
-      const { error: upErr } = await supa.storage.from("certs").upload(path, pdfBuffer, { contentType: "application/pdf", upsert: true });
+      const { error: upErr } = await supa.storage.from("certs").upload(path, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: true
+      });
       if (!upErr) certificate_path = path;
     }
 
@@ -278,7 +272,7 @@ export async function handler(event, context) {
       await supa.from("lot_events").insert({ user_id: lot.user_id, lot_id: lotId, event_type: "pdf_generated", data: { certificate_path } });
     }
 
-    // 9) Pipeline (estático para animación en UI)
+    // 9) Stages para UI
     const stages = [
       { step: "lectura",     label: "Lectura de documentos",      status: "done" },
       { step: "extraccion",  label: "Extracción de campos",       status: "done" },
