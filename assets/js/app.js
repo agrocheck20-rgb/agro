@@ -9,6 +9,107 @@ const state = {
 function $(s){return document.querySelector(s)}
 function el(h){const d=document.createElement("div"); d.innerHTML=h.trim(); return d.firstElementChild}
 function toast(m,ok=true){const t=el(`<div class="fixed top-4 right-4 bg-white border ${ok?'border-emerald-300 text-emerald-700':'border-rose-300 text-rose-700'} shadow-lg px-4 py-2 rounded-xl z-[9999]">${m}</div>`); document.body.appendChild(t); setTimeout(()=>t.remove(),3500);}
+function pipelineReset() {
+  const steps = [
+    { key:"lectura",    label:"Lectura de documentos" },
+    { key:"extraccion", label:"Extracción de campos" },
+    { key:"validacion", label:"Validación de reglas" },
+    { key:"decision",   label:"Decisión del lote" },
+    { key:"resultado",  label:"Preparando resultado" }
+  ];
+  const ol = document.getElementById("aiPipeline");
+  if (!ol) return;
+  ol.innerHTML = steps.map(s =>
+    `<li data-step="${s.key}" class="flex items-center gap-2">
+      <span class="w-5 h-5 inline-flex items-center justify-center rounded-full bg-slate-200 text-[10px]">…</span>
+      <span>${s.label}</span>
+    </li>`).join("");
+}
+function pipelineMark(stepKey, status) {
+  const li = document.querySelector(`#aiPipeline li[data-step="${stepKey}"]`);
+  if (!li) return;
+  const dot = li.querySelector("span:first-child");
+  if (status === "doing") { dot.textContent = "⏳"; dot.className = "w-5 h-5 inline-flex items-center justify-center rounded-full bg-amber-200"; }
+  if (status === "done")  { dot.textContent = "✓";  dot.className = "w-5 h-5 inline-flex items-center justify-center rounded-full bg-emerald-300"; }
+  if (status === "error") { dot.textContent = "×";  dot.className = "w-5 h-5 inline-flex items-center justify-center rounded-full bg-rose-300"; }
+}
+
+function chatAdd(role, text) {
+  const box = document.getElementById("aiChat");
+  if (!box) return;
+  const bubble = document.createElement("div");
+  bubble.className = `mb-2 ${role==="user" ? "text-right" : "text-left"}`;
+  bubble.innerHTML = `<div class="inline-block max-w-[85%] px-3 py-2 rounded-xl ${role==="user"?"bg-indigo-600 text-white":"bg-white border"}">${(text||"").replace(/\n/g,"<br/>")}</div>`;
+  box.appendChild(bubble);
+  box.scrollTop = box.scrollHeight;
+}
+function chatTyping(on=true) {
+  const box = document.getElementById("aiChat");
+  if (!box) return;
+  if (on) {
+    const el = document.createElement("div");
+    el.id = "aiTyping";
+    el.className = "mb-2 text-left";
+    el.innerHTML = `<div class="inline-block px-3 py-2 rounded-xl bg-white border"><span class="animate-pulse">Escribiendo…</span></div>`;
+    box.appendChild(el); box.scrollTop = box.scrollHeight;
+  } else {
+    document.getElementById("aiTyping")?.remove();
+  }
+}
+
+function renderDocChips(checklist=[]) {
+  const wrap = document.getElementById("docChips");
+  if (!wrap) return;
+  const color = (st)=> st==="ok"?"bg-emerald-100 text-emerald-700":(st==="faltante"?"bg-rose-100 text-rose-700":"bg-amber-100 text-amber-700");
+  wrap.innerHTML = checklist.map(i =>
+    `<span class="px-2 py-1 rounded-full text-xs ${color(i.status)}">${i.doc_type} • ${i.status}</span>`
+  ).join("");
+}
+
+function renderAIResults({ decision, checklist, per_doc_fields, observations }) {
+  const out = document.getElementById("aiResults");
+  if (!out) return;
+  const blocks = [];
+  blocks.push(`<div class="mb-2"><b>Decisión:</b> <span class="uppercase">${decision}</span></div>`);
+  if (observations) blocks.push(`<div class="mb-2 text-slate-600"><b>Observaciones:</b> ${observations}</div>`);
+
+  if ((checklist||[]).length) {
+    blocks.push(`<div class="mt-3 font-semibold">Checklist</div>`);
+    blocks.push(checklist.map(i=>{
+      const issues = (i.issues||[]).map(x=>`• ${x.field? `<b>${x.field}</b>: `:""}${x.reason}`).join("<br/>");
+      return `<div class="p-3 border rounded-lg mb-2 bg-white">
+        <div class="font-medium">${i.doc_type} — <span class="uppercase">${i.status}</span> ${i.required? "(requerido)":""}</div>
+        ${issues? `<div class="mt-1 text-slate-600">${issues}</div>`:""}
+      </div>`;
+    }).join(""));
+  }
+
+  const keys = Object.keys(per_doc_fields||{});
+  if (keys.length) {
+    blocks.push(`<div class="mt-3 font-semibold">Campos detectados</div>`);
+    for (const k of keys) {
+      const rows = per_doc_fields[k]||[];
+      blocks.push(`<div class="mt-2"><div class="text-sm font-medium mb-1">${k}</div>
+        <div class="overflow-auto">
+          <table class="min-w-full text-xs border">
+            <thead class="bg-slate-50">
+              <tr><th class="px-2 py-1 text-left">Campo</th><th class="px-2 py-1 text-left">Valor</th><th class="px-2 py-1">Conf.</th><th class="px-2 py-1 text-left">Comentario</th></tr>
+            </thead>
+            <tbody>
+              ${rows.map(r=>`<tr class="border-t">
+                 <td class="px-2 py-1">${r.field||"-"}</td>
+                 <td class="px-2 py-1">${(r.value||"").toString().slice(0,200)}</td>
+                 <td class="px-2 py-1 text-center">${r.confidence!=null? Math.round(r.confidence*100)+"%":"—"}</td>
+                 <td class="px-2 py-1">${r.comment||""}</td>
+               </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>`);
+    }
+  }
+  out.innerHTML = blocks.join("");
+}
 
 // ===== Navegación
 const views=["dashboard","validate","lots","account","help"];
@@ -196,6 +297,65 @@ async function loadLotIntoForm(lotId){
 }
 
 // ===== Validación IA
+document.getElementById("btnRunAI")?.addEventListener("click", async ()=>{
+  if (!state.currentLotId) { toast("Primero guarda o elige un lote", false); return; }
+
+  // Reset visual del pipeline
+  pipelineReset();
+  ["lectura","extraccion","validacion","decision","resultado"].forEach((k,i)=>{
+    setTimeout(()=>pipelineMark(k, i===0?"doing":"pending"), i*100);
+  });
+  renderDocChips([]);
+  const resultsBox = document.getElementById("aiResults");
+  if (resultsBox) resultsBox.textContent = "Procesando…";
+  chatAdd("assistant","Empezaré a revisar tus documentos. Esto puede tomar unos segundos.");
+  const btn = document.getElementById("btnRunAI"); btn.disabled = true; btn.textContent = "Validando…";
+  chatTyping(true);
+
+  try {
+    const r = await fetch("/.netlify/functions/validate-docs?lot_id="+encodeURIComponent(state.currentLotId));
+    const data = await r.json();
+    chatTyping(false);
+    if (!r.ok) throw new Error(data?.error || "Error IA");
+
+    // Animar pipeline
+    const order = (data.stages||[]).map(s=>s.step);
+    const unique = Array.from(new Set(order.length?order:["lectura","extraccion","validacion","decision","resultado"]));
+    let idx = 0;
+    const tick = ()=> {
+      if (idx>0) pipelineMark(unique[idx-1],"done");
+      if (idx<unique.length) { pipelineMark(unique[idx],"doing"); idx++; setTimeout(tick, 400); }
+      else pipelineMark(unique[unique.length-1], "done");
+    };
+    tick();
+
+    // Pintar chips y resultados
+    renderDocChips(data.checklist||[]);
+    renderAIResults({
+      decision: data.decision,
+      checklist: data.checklist,
+      per_doc_fields: data.per_doc_fields,
+      observations: data.observations
+    });
+
+    // Narrativa al chat
+    (data.narrative||[]).forEach(m => chatAdd("assistant", m.text));
+
+    // PDF si está
+    document.getElementById("btnPDF")?.classList.toggle("hidden", !data.certificate_path);
+
+    // refrescar tablero/estadísticas
+    await loadLots(); await renderDashboard(); await loadProfile();
+    toast("Validación IA completada");
+  } catch (e) {
+    console.error(e);
+    chatTyping(false);
+    chatAdd("assistant","Ocurrió un error al validar. Intenta nuevamente.");
+    toast("Error en validación IA", false);
+  } finally {
+    btn.disabled = false; btn.textContent = "Validar con IA ahora";
+  }
+});
 
 // Elegir lote existente desde el selector
 $("#btnPickLot")?.addEventListener("click", async ()=>{
@@ -399,4 +559,27 @@ $("#btnUpdateProfile").addEventListener("click", async ()=>{
 $("#btnLogin").addEventListener("click", ()=>{ document.getElementById("authCard").scrollIntoView({behavior:"smooth"}); });
 
 // Start
+document.getElementById("aiChatSend")?.addEventListener("click", sendChat);
+document.getElementById("aiChatInput")?.addEventListener("keydown", (e)=>{
+  if (e.key==="Enter") sendChat();
+});
+async function sendChat(){
+  if (!state.currentLotId) { toast("Selecciona/crea un lote primero", false); return; }
+  const inp = document.getElementById("aiChatInput");
+  const msg = inp.value.trim(); if (!msg) return;
+  chatAdd("user", msg); inp.value = ""; chatTyping(true);
+  try {
+    const r = await fetch("/.netlify/functions/ai-chat", {
+      method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ lot_id: state.currentLotId, message: msg })
+    });
+    const data = await r.json(); chatTyping(false);
+    if (!r.ok) throw new Error(data?.error || "Fallo chat");
+    chatAdd("assistant", data.text);
+  } catch(e) {
+    chatTyping(false);
+    chatAdd("assistant","No pude responder en este momento.");
+  }
+}
+
 refreshSession();
