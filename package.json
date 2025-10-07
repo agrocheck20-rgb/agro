@@ -2,7 +2,6 @@
   "name": "agrocheck-netlify",
   "version": "2.1.0",
   "private": true,
-  "type": "module",
   "dependencies": {
     "@supabase/supabase-js": "^2.43.4",
     "openai": "^4.60.1",
