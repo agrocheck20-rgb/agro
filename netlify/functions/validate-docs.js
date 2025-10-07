@@ -5,10 +5,20 @@ import fetch from "node-fetch";
 import pdfParse from "pdf-parse";
 import PDFDocument from "pdfkit";
 
+// ---------- Helpers de respuesta JSON ----------
+function json(status, obj) {
+  return {
+    statusCode: status,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    body: JSON.stringify(obj)
+  };
+}
+
+// ---------- Clientes ----------
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const supa = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
 
-// Utilidades
+// ---------- Utils ----------
 async function fetchArrayBuffer(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error("No se pudo descargar archivo");
@@ -60,7 +70,7 @@ async function generateCertificatePDF(payload) {
   });
 }
 
-// Schema de salida estructurada (Responses API → Structured Outputs)
+// ---------- JSON Schema para Structured Outputs ----------
 const validationSchema = {
   name: "ValidationResult",
   schema: {
@@ -92,7 +102,6 @@ const validationSchema = {
           additionalProperties: false
         }
       },
-      // campos extra para “wow visual”
       per_doc_fields: {
         type: "object",
         additionalProperties: {
@@ -110,7 +119,6 @@ const validationSchema = {
           }
         }
       },
-      // mensajes breves para el chat lateral
       narrative: {
         type: "array",
         items: {
@@ -129,51 +137,33 @@ const validationSchema = {
   }
 };
 
-// Prompt de sistema (rol de validador)
 const SYSTEM_PROMPT = `
 Eres un asistente de validación documental para exportaciones agroindustriales.
-A partir de:
-(1) requisitos por doc_type y campos obligatorios,
-(2) texto extraído de documentos aportados (OCR/PDF),
-(3) datos del lote (producto, país destino),
-devuelve JSON ESTRICTO conforme al schema con:
-
-- decision del lote: "aprobado" si TODOS los requeridos están presentes y sin observaciones críticas,
-  "rechazado" si falta cualquiera requerido o hay campos obligatorios inválidos,
-  "pendiente" si aún no están todos los requeridos.
-- checklist por doc_type con status: "ok" | "faltante" | "observado", e issues (campo y motivo).
-- per_doc_fields: lista de campos detectados por doc con (value, confidence, y un comment breve si aplica).
-- narrative: 3-6 mensajes cortos (role=assistant) explicando en lenguaje natural el proceso y hallazgos.
-
-Responde SOLO con JSON (sin texto extra).
+Con requisitos por doc_type, texto OCR y datos del lote, devuelve JSON (schema) con:
+- decision del lote ("aprobado"|"rechazado"|"pendiente"),
+- checklist por doc_type (status ok/faltante/observado + issues),
+- per_doc_fields (campos detectados con valor/confianza/coment),
+- narrative (3–6 mensajes cortos explicando el proceso).
+Solo JSON.
 `;
 
-// Helper “stages” para el pipeline
-function startStages() {
-  const now = Date.now();
-  const S = [];
-  const push = (step, message) => {
-    S.push({ step, message, at: new Date().toISOString() });
-  };
-  return { S, push, t0: now };
-}
-
-export default async (req, res) => {
+// ---------- Handler Netlify ----------
+export async function handler(event, context) {
   try {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const lotId = url.searchParams.get("lot_id");
-    if (!lotId) return res.status(400).json({ error: "Falta lot_id" });
+    // 0) Obtener lot_id de query o body
+    const qs = event.queryStringParameters || {};
+    const lotId =
+      qs.lot_id ||
+      (event.httpMethod === "POST" ? (JSON.parse(event.body || "{}").lot_id) : null);
 
-    const { S, push } = startStages();
+    if (!lotId) return json(400, { error: "Falta lot_id" });
 
     // 1) Cargar lote y perfil
-    push("lectura", "Cargando datos del lote y perfil");
     const { data: lot, error: eLot } = await supa.from("lots").select("*").eq("id", lotId).single();
-    if (eLot || !lot) return res.status(404).json({ error: "Lote no encontrado" });
+    if (eLot || !lot) return json(404, { error: "Lote no encontrado" });
     const { data: profile } = await supa.from("profiles").select("*").eq("id", lot.user_id).single();
 
-    // 2) Requisitos (específicos o por defecto)
-    push("lectura", "Cargando requisitos por producto y país");
+    // 2) Requisitos (específicos o defaults)
     let { data: reqs } = await supa.from("doc_requirements")
       .select("doc_type, required")
       .eq("product", lot.product).eq("country_code", lot.destination_country);
@@ -183,18 +173,14 @@ export default async (req, res) => {
     }
 
     // 3) Documentos del lote
-    push("lectura", "Listando documentos cargados por el usuario");
     const { data: docs } = await supa.from("documents").select("*").eq("lot_id", lotId);
     const byType = {};
     for (const d of (docs || [])) (byType[d.doc_type] ||= []).push(d);
 
-    // 4) Plantillas (campos obligatorios)
-    push("lectura", "Consultando plantillas de validación");
+    // 4) Plantillas/campos obligatorios
     const { data: templates } = await supa.from("doc_templates").select("*");
-    const tmplByType = Object.fromEntries((templates || []).map(t => [t.doc_type, t]));
 
-    // 5) Evidencias por documento (texto de PDFs)
-    push("extraccion", "Extrayendo texto de PDFs");
+    // 5) Evidencias por doc (OCR de PDFs)
     const perDocEvidence = {};
     for (const r of reqs) {
       const t = r.doc_type;
@@ -217,9 +203,8 @@ export default async (req, res) => {
       perDocEvidence[t] = { files, text: fullText.trim() };
     }
 
-    // 6) Construir contexto para el modelo
-    push("validacion", "Construyendo contexto para IA");
-    const context = {
+    // 6) Contexto para el modelo
+    const contextPayload = {
       lote: {
         product: lot.product, variety: lot.variety, lot_code: lot.lot_code,
         origin_region: lot.origin_region, origin_province: lot.origin_province,
@@ -234,17 +219,15 @@ export default async (req, res) => {
       evidence: perDocEvidence
     };
 
-    // 7) Llamada a OpenAI (Structured Outputs / JSON Schema)
-    push("validacion", "Enviando a IA (análisis y comparación)");
+    // 7) OpenAI (Structured Outputs)
     const response = await openai.responses.create({
       model: "gpt-4o-mini",
       input: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: [{ type: "text", text: JSON.stringify(context) }] }
+        { role: "user", content: [{ type: "text", text: JSON.stringify(contextPayload) }] }
       ],
       response_format: { type: "json_schema", json_schema: validationSchema }
     });
-    // (Responses API con json_schema: salida JSON conforme al schema) :contentReference[oaicite:1]{index=1}
 
     let parsed = {};
     try {
@@ -254,8 +237,7 @@ export default async (req, res) => {
       parsed = { decision: "pendiente", checklist: [], narrative: [{role:"assistant", text:"No se pudo parsear la respuesta JSON"}] };
     }
 
-    // 8) Decisión y actualización del lote / certificado
-    push("decision", "Determinando decisión y actualizando lote");
+    // 8) Decisión y actualización DB
     const approved = parsed.decision === "aprobado";
     const status = parsed.decision;
 
@@ -290,24 +272,22 @@ export default async (req, res) => {
       patch.reviewed_by = lot.user_id;
     }
     await supa.from("lots").update(patch).eq("id", lotId);
-    push("resultado", "Guardando eventos y uso de IA");
-
     await supa.from("profiles").update({ ia_used: (profile?.ia_used || 0) + 1 }).eq("id", lot.user_id);
     await supa.from("lot_events").insert({ user_id: lot.user_id, lot_id: lotId, event_type: "ai_checked", data: { result: parsed } });
     if (approved && certificate_path) {
       await supa.from("lot_events").insert({ user_id: lot.user_id, lot_id: lotId, event_type: "pdf_generated", data: { certificate_path } });
     }
 
-    // 9) Pipeline (stages) para el Workbench
+    // 9) Pipeline (estático para animación en UI)
     const stages = [
-      { step: "lectura",     label: "Lectura de documentos",        status: "done" },
-      { step: "extraccion",  label: "Extracción de campos",         status: "done" },
-      { step: "validacion",  label: "Validación de reglas",         status: "done" },
-      { step: "decision",    label: "Decisión del lote",            status: "done" },
-      { step: "resultado",   label: "Preparando resultado final",   status: "done" }
+      { step: "lectura",     label: "Lectura de documentos",      status: "done" },
+      { step: "extraccion",  label: "Extracción de campos",       status: "done" },
+      { step: "validacion",  label: "Validación de reglas",       status: "done" },
+      { step: "decision",    label: "Decisión del lote",          status: "done" },
+      { step: "resultado",   label: "Preparando resultado final", status: "done" }
     ];
 
-    return res.status(200).json({
+    return json(200, {
       ok: true,
       decision: parsed.decision,
       checklist: parsed.checklist || [],
@@ -319,7 +299,7 @@ export default async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Error en validación IA", details: String(err) });
+    console.error("validate-docs error:", err);
+    return json(500, { error: "Error en validación IA", details: String(err) });
   }
-};
+}
