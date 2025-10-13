@@ -135,6 +135,11 @@
             <div class="mt-4">
               <label class="text-sm block mb-1">Fotos del lote (opcional)</label>
               <input type="file" id="lotPhotos" multiple accept="image/*" class="w-full" />
+              <div class="mt-3 flex items-center gap-2">
+  <button id="btnRunVision" class="border rounded-xl px-4 py-2">Analizar fotos con IA</button>
+</div>
+<div id="visionResults" class="mt-3 text-sm text-slate-700"></div>
+
             </div>
           </div>
         <!-- IA Workbench: pipeline + resultados + chat -->
