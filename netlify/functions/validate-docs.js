@@ -99,13 +99,14 @@ const validationSchema = {
 
 
 const SYSTEM_PROMPT = `
-Eres un asistente de validación documental para exportaciones agroindustriales.
-Devuelve SOLO JSON conforme al schema:
-- decision del lote ("aprobado"|"rechazado"|"pendiente"),
-- checklist por doc_type (ok/faltante/observado + issues),
-- per_doc_fields: campos detectados con valor/confianza/comentario,
-- narrative: 3–6 mensajes breves explicando el proceso.
+Eres un verificador de documentación de exportación. Reglas IMPORTANTES de normalización antes de validar:
+1) HS: si el código viene con puntos/espacios (ej. "0804.40.00"), QUITA todo lo que no sea dígito y usa los PRIMEROS 6 dígitos para chequear longitud mínima (=> "080440").
+2) País de origen: acepta "PE", "Peru", "Perú", "Republic of Peru", "PE (Perú)" como PE.
+3) Factura/PackingList: si la tabla de ítems está en formato tabular, DETECTA renglones (items) con descripción, cantidad, unidad, valor unitario, total. Acepta cabeceras equivalentes ("description"/"descripcion", "qty"/"quantity"/"cantidad", "unit"/"unidad", "unit_value"/"unit price"/"valor unitario", "total"/"importe").
+4) Si hay varias páginas o campos repetidos, elige el valor más consistente.
+Devuelve JSON ESTRICTO del schema (decision, checklist, issues). Explica las faltas con precisión si algo de verdad no está.
 `;
+
 
 // ===== Netlify Function (CommonJS) =====
 exports.handler = async (event, context) => {
