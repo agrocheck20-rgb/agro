@@ -162,29 +162,72 @@ if (!Array.isArray(templates) || templates.length === 0) {
 }
 
 
-    // 5) Evidencias (texto PDFs)
-    const perDocEvidence = {};
-    for (const r of reqs) {
-      const t = r.doc_type;
-      const rows = byType[t] || [];
-      if (rows.length === 0) { perDocEvidence[t] = { files: [], text: "" }; continue; }
+    // 5) Evidencias (texto PDFs + archivos para OCR/visión)
+async function uploadOpenAIFileFromSignedUrl(signedUrl, filename="doc.pdf") {
+  const { toFile } = await import("openai/uploads");
+  const { default: OpenAI } = await import("openai");
+  const openaiLocal = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const resp = await fetch(signedUrl);
+  const buf = await resp.arrayBuffer();
+  const file = await toFile(Buffer.from(buf), filename, { type: "application/pdf" });
+  const up = await openaiLocal.files.create({ file, purpose: "vision" });
+  return up.id; // file_id
+}
 
-      const files = [];
-      let fullText = "";
-      for (const row of rows) {
-        const { data: signed } = await supa.storage.from("docs").createSignedUrl(row.file_path, 60);
-        if (!signed?.signedUrl) continue;
-        files.push({ path: row.file_path, url: signed.signedUrl });
-        if (row.file_path.toLowerCase().endsWith(".pdf")) {
-          try {
-            fullText += `\n[${row.file_path}]\n${await extractPdfTextFromSignedUrl(signed.signedUrl)}\n`;
-          } catch {
-            fullText += `\n[${row.file_path}] (no fue posible extraer texto)\n`;
-          }
-        }
-      }
-      perDocEvidence[t] = { files, text: fullText.trim() };
+const perDocEvidence = {};
+for (const r of reqs) {
+  const t = r.doc_type;
+  const rows = byType[t] || [];
+  if (rows.length === 0) {
+    perDocEvidence[t] = { files: [], text: "", file_ids: [] };
+    continue;
+  }
+
+  const files = [], file_ids = [];
+  let fullText = "";
+
+  for (const row of rows) {
+    const { data: signed } = await supa.storage.from("docs").createSignedUrl(row.file_path, 60);
+    if (!signed?.signedUrl) continue;
+    files.push({ path: row.file_path, url: signed.signedUrl });
+
+    // Carga a OpenAI como input_file para OCR
+    try {
+      const fid = await uploadOpenAIFileFromSignedUrl(
+        signed.signedUrl, row.file_path.split("/").pop() || "doc.pdf"
+      );
+      file_ids.push(fid);
+    } catch (e) {
+      console.error("uploadOpenAIFile error:", e);
     }
+
+    // Si hay texto embebido en el PDF, también lo aprovechamos
+    if (row.file_path.toLowerCase().endsWith(".pdf")) {
+      try { fullText += `\n[${row.file_path}]\n${await extractPdfTextFromSignedUrl(signed.signedUrl)}\n`; }
+      catch { fullText += `\n[${row.file_path}] (no fue posible extraer texto)\n`; }
+    }
+  }
+  perDocEvidence[t] = { files, text: fullText.trim(), file_ids };
+}
+// Referencias (plantillas + ejemplo) desde bucket 'kb'
+const kbRefs = [];
+const kbPaths = [
+  { path: "co_formato.pdf",  alias: "cert_origen_formato.pdf" },
+  { path: "packinglist.pdf", alias: "packing_list_formato.pdf" },
+  { path: "factura.pdf",     alias: "factura_formato.pdf" },
+  { path: "co_ejemplo.pdf",  alias: "cert_origen_ejemplo_lleno.pdf" }
+];
+for (const k of kbPaths) {
+  const { data: signed } = await supa.storage.from("kb").createSignedUrl(k.path, 60);
+  if (signed?.signedUrl) {
+    try {
+      const fid = await uploadOpenAIFileFromSignedUrl(signed.signedUrl, k.alias);
+      kbRefs.push({ alias: k.alias, file_id: fid });
+    } catch (e) {
+      console.error("kb upload error:", e);
+    }
+  }
+}
 
     // 6) Contexto para IA
     const contextPayload = {
@@ -203,11 +246,39 @@ if (!Array.isArray(templates) || templates.length === 0) {
     };
 
     // 7) OpenAI (Structured Outputs)
-    const response = await openai.responses.create({
+// Construye input para IA: contexto + archivos
+const userContent = [
+  {
+    type: "input_text",
+    text:
+`Contexto del lote:
+${JSON.stringify(contextPayload, null, 2)}
+
+Instrucciones:
+1) Usa los archivos adjuntos como FUENTE PRIMARIA (PDFs del usuario y plantillas de referencia).
+2) Verifica campos obligatorios según doc_type (usa 'required_fields').
+3) Si un PDF es imagen, aplica OCR (lee el archivo adjunto).
+4) Devuelve JSON EXACTO del schema (decision + checklist + issues por campo).`
+  }
+];
+
+// Adjunta TODOS los PDFs del lote
+for (const t of Object.keys(perDocEvidence)) {
+  for (const fid of (perDocEvidence[t].file_ids || [])) {
+    userContent.push({ type: "input_file", file_id: fid });
+  }
+}
+
+// Adjunta referencias (plantillas + ejemplo)
+for (const ref of kbRefs) {
+  userContent.push({ type: "input_file", file_id: ref.file_id });
+}
+
+const response = await openai.responses.create({
   model: "gpt-4o-mini",
   input: [
     { role: "system", content: [{ type: "input_text", text: SYSTEM_PROMPT }] },
-    { role: "user",   content: [{ type: "input_text", text: JSON.stringify(contextPayload) }] }
+    { role: "user",   content: userContent }
   ],
   text: {
     format: {
@@ -218,6 +289,9 @@ if (!Array.isArray(templates) || templates.length === 0) {
     }
   }
 });
+
+// (opcional) log de uso
+console.log("OpenAI usage:", response.usage);
 
 let parsed = {};
 try {
