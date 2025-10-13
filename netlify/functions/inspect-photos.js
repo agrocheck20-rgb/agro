@@ -14,22 +14,30 @@ exports.handler = async (event) => {
 
     // Lote + fotos (acepta lot_id o lot_code)
 let lot = null;
-if (lot_id) {
-  const q1 = await supa.from("lots").select("*").eq("id", lot_id).single();
-  lot = q1.data;
+
+// 1) intenta por lot_id
+if (event.queryStringParameters?.lot_id) {
+  const { data } = await supa.from("lots").select("*").eq("id", event.queryStringParameters.lot_id).single();
+  lot = data || null;
 }
-if (!lot) {
-  const url = new URL(event.rawUrl || "http://x/");
-  const lot_code = url.searchParams.get("lot_code");
-  if (lot_code) {
-    const q2 = await supa.from("lots").select("*").eq("lot_code", lot_code).single();
-    lot = q2.data;
-  }
+
+// 2) si no, intenta por lot_code
+if (!lot && event.queryStringParameters?.lot_code) {
+  const { data } = await supa.from("lots").select("*").eq("lot_code", event.queryStringParameters.lot_code).single();
+  lot = data || null;
 }
+
 if (!lot) return json(404, { error: "Lote no encontrado" });
 
-const { data: photos } = await supa.from("lot_photos").select("file_path").eq("lot_id", lot.id).order("created_at",{ascending:true});
-if (!photos || photos.length === 0) return json(200, { ok: true, per_photo: [], summary: "No hay fotos en este lote." });
+const { data: photos } = await supa
+  .from("lot_photos")
+  .select("file_path")
+  .eq("lot_id", lot.id)
+  .order("created_at", { ascending: true });
+
+if (!photos || photos.length === 0) {
+  return json(200, { ok: true, per_photo: [], summary: "No hay fotos en este lote." });
+}
 
 
     // Subir fotos como input_file
