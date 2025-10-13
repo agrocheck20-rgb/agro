@@ -12,11 +12,25 @@ exports.handler = async (event) => {
     const { createClient } = await import("@supabase/supabase-js");
     const supa = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
 
-    // Lote + fotos
-    const { data: lot } = await supa.from("lots").select("*").eq("id", lot_id).single();
-    const { data: photos } = await supa.from("lot_photos").select("file_path").eq("lot_id", lot_id).order("created_at", { ascending: true });
-    if (!lot) return json(404, { error: "Lote no encontrado" });
-    if (!photos || photos.length === 0) return json(200, { ok: true, per_photo: [], summary: "No hay fotos en este lote." });
+    // Lote + fotos (acepta lot_id o lot_code)
+let lot = null;
+if (lot_id) {
+  const q1 = await supa.from("lots").select("*").eq("id", lot_id).single();
+  lot = q1.data;
+}
+if (!lot) {
+  const url = new URL(event.rawUrl || "http://x/");
+  const lot_code = url.searchParams.get("lot_code");
+  if (lot_code) {
+    const q2 = await supa.from("lots").select("*").eq("lot_code", lot_code).single();
+    lot = q2.data;
+  }
+}
+if (!lot) return json(404, { error: "Lote no encontrado" });
+
+const { data: photos } = await supa.from("lot_photos").select("file_path").eq("lot_id", lot.id).order("created_at",{ascending:true});
+if (!photos || photos.length === 0) return json(200, { ok: true, per_photo: [], summary: "No hay fotos en este lote." });
+
 
     // Subir fotos como input_file
     async function fileId(path) {
