@@ -367,6 +367,41 @@ if (!r.ok) {
     btn.disabled = false; btn.textContent = "Validar con IA ahora";
   }
 });
+document.getElementById("btnRunVision")?.addEventListener("click", async ()=>{
+  if (!state.currentLotId) return toast("Primero guarda o elige un lote", false);
+  const box = document.getElementById("visionResults");
+  box.textContent = "Analizando fotos…";
+  try {
+    const r = await fetch("/.netlify/functions/inspect-photos?lot_id="+encodeURIComponent(state.currentLotId));
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error || "Fallo visión");
+
+    const chips = (data.per_photo||[]).map(p=>{
+      const ok = p.export_ready;
+      const badge = ok ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700';
+      const issues = (p.issues||[]).join(", ") || "—";
+      return `<div class="p-3 border rounded-lg bg-white">
+        <div class="text-xs mb-1"><span class="px-2 py-0.5 rounded-full ${badge}">${ok?'APTA':'NO APTA'}</span></div>
+        <div><b>Foto:</b> ${p.photo_path.split('/').pop()}</div>
+        <div><b>Esperado:</b> ${p.product_expected || "-"}</div>
+        <div><b>Detectado:</b> ${p.product_detected || "-"} (conf. ${Math.round((p.confidence||0)*100)}%)</div>
+        <div><b>Madurez:</b> ${p.ripeness || "-"}</div>
+        <div><b>Problemas:</b> ${issues}</div>
+        <div><b>Notas:</b> ${p.notes || "-"}</div>
+      </div>`;
+    }).join("");
+
+    box.innerHTML = (chips || "Sin resultados") + (data.summary ? `<div class="mt-2 text-slate-600">${data.summary}</div>` : "");
+
+    if (data.usage) {
+      chatAdd("assistant", `Visión: input ${data.usage.input_tokens ?? "?"} / output ${data.usage.output_tokens ?? "?"} tokens (total ${data.usage.total_tokens ?? "?"}).`);
+    }
+  } catch (e) {
+    console.error(e);
+    box.textContent = "Error al analizar fotos.";
+    toast("Error en visión", false);
+  }
+});
 
 // Elegir lote existente desde el selector
 $("#btnPickLot")?.addEventListener("click", async ()=>{
