@@ -1,8 +1,6 @@
 // netlify/functions/validate-docs.js
 // CJS (CommonJS) con imports ESM dinámicos cuando hace falta
 
-const PDFDocument = require("pdfkit");
-
 // ---------- Helpers de respuesta ----------
 function json(status, obj) {
   return {
@@ -26,41 +24,12 @@ async function extractPdfTextFromSignedUrl(signedUrl) {
   return res?.text || "";
 }
 
+// Ya no generamos PDF en el servidor.
+// Dejamos un stub por compatibilidad.
 async function generateCertificatePDF(payload) {
-  return await new Promise((resolve) => {
-    const doc = new PDFDocument({ size: "A4", margin: 50 });
-    const chunks = [];
-    doc.on("data", (d) => chunks.push(d));
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-
-    doc.fontSize(18).font("Times-Bold").text(
-      "Constancia de Aprobación de Calidad y Documentación",
-      { align: "center" }
-    );
-    doc.moveDown();
-    doc.fontSize(12).font("Times-Roman");
-    const line = (label, value) => {
-      doc.font("Times-Bold").text(label, { continued: true })
-         .font("Times-Roman").text(" " + (value ?? "-"));
-    };
-    doc.moveDown();
-    line("Certificado Nº:", payload.certificate_number ?? "—");
-    line("Empresa:", payload.empresa);
-    line("RUC:", payload.ruc ?? "—");
-    line("Producto:", payload.producto);
-    line("Variedad:", payload.variedad ?? "—");
-    line("Lote:", payload.lote);
-    line("Origen:", payload.origen ?? "—");
-    line("Destino:", payload.destino);
-    line("Fecha de emisión:", payload.fecha);
-    line("Estado:", "APROBADO");
-    doc.moveDown().font("Times-Bold").text("Observaciones:");
-    doc.font("Times-Roman").text(payload.observaciones || "Sin observaciones");
-    doc.moveDown().font("Times-Italic").fontSize(10)
-       .text("Documento generado por AgroCheck.");
-    doc.end();
-  });
+  return null; // no se usa aquí
 }
+
 
 // ---------- Schema (Structured Outputs) ----------
 // ---------- Schema (Structured Outputs) ----------
@@ -350,30 +319,9 @@ ${JSON.stringify(context, null, 2)}`
 
     // 8) Si aprobado => generar PDF + actualizar lote
     let certificate_path = null;
-    if (!anyObs) {
-      const certPayload = {
-        empresa: profile?.full_name || profile?.email || "Exportador",
-        ruc: "—",
-        producto: lot.product,
-        variedad: lot.variety,
-        lote: lot.lot_code,
-        origen: `${lot.origin_region || "-"}, ${lot.origin_province || "-"}`,
-        destino: lot.destination_country,
-        fecha: new Date().toLocaleDateString(),
-        observaciones: observations || "",
-      };
-      const pdfBuffer = await generateCertificatePDF(certPayload);
-      const path = `${lot.user_id}/${lot.id}/cert_${Date.now()}.pdf`;
-      const { error: upErr } = await supa.storage.from("certs").upload(path, pdfBuffer, {
-        contentType: "application/pdf", upsert: true
-      });
-      if (!upErr) certificate_path = path;
-    }
-
-    const patch = { approved: !anyObs, status: decision, observations };
-    if (certificate_path) { patch.certificate_path = certificate_path; patch.validated_at = new Date().toISOString(); patch.reviewed_by = lot.user_id; }
-    await supa.from("lots").update(patch).eq("id", lotId);
-
+// Nota: por simplicidad ya NO generamos el PDF aquí.
+// El front-end (botón “Guardar resultado + generar PDF”) seguirá
+// creando y subiendo el PDF con jsPDF como ya lo hacía.
     // contar uso IA
     await supa.from("profiles").update({ ia_used: (profile?.ia_used || 0) + 1 }).eq("id", lot.user_id);
 
