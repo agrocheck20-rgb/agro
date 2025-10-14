@@ -1,11 +1,11 @@
 // ===== Estado + helpers
 const state = {
-  user:null, profile:null,
-  currentLotId:null,
-  requiredDocs:[], docTypesCache:null, countriesCache:null, productsCache:null,
-  lotsCache:[]
+  user: null, profile: null,
+  currentLotId: null,
+  requiredDocs: [], docTypesCache: null, countriesCache: null, productsCache: null,
+  lotsCache: [],
   // ===== Vision (fotos) =====
-let pendingPhotos = [];   // almacena SOLO las fotos recién seleccionadas para análisis
+  pendingPhotos: []   // almacena SOLO las fotos recién seleccionadas para análisis
 };
 
 function $(s){return document.querySelector(s)}
@@ -419,17 +419,6 @@ document.getElementById("btnRunVision")?.addEventListener("click", async ()=>{
   }
 });
 
-  // Intenta leer el body de error para mostrar detalle
-  try {
-    const r2 = await fetch("/.netlify/functions/inspect-photos?lot_id="+encodeURIComponent(state.currentLotId)+"&debug=1");
-    const dbg = await r2.json();
-    console.log("debug:", dbg);
-  } catch {}
-  toast("Error en visión: " + e.message, false);
-}
-
-});
-
 // Elegir lote existente desde el selector
 $("#btnPickLot")?.addEventListener("click", async ()=>{
   const lotId = $("#selectLotPicker").value;
@@ -503,19 +492,22 @@ async function renderRequirements(){
   });
 
   $("#lotPhotos").addEventListener("change", async (e)=>{
-    const files=Array.from(e.target.files||[]);
-    if(!state.currentLotId) return toast("Primero guarda el lote", false);
-    for(const f of files){
-      const path=`${state.user.id}/${state.currentLotId}/photo_${Date.now()}_${f.name}`;
-      const { error } = await sb.storage.from("photos").upload(path, f, { upsert:true });
-      if(!error){
-        await sb.from("lot_photos").insert({ user_id: state.user.id, lot_id: state.currentLotId, file_path: path });
-        if (!state.pendingPhotos) state.pendingPhotos = [];
-state.pendingPhotos.push(path); // guarda las que acabas de subir
-      }
+  const files = Array.from(e.target.files||[]);
+  if(!state.currentLotId) return toast("Primero guarda el lote", false);
+
+  for(const f of files){
+    const path = `${state.user.id}/${state.currentLotId}/photo_${Date.now()}_${f.name}`;
+    const { error } = await sb.storage.from("photos").upload(path, f, { upsert:true });
+    if(!error){
+      await sb.from("lot_photos").insert({ user_id: state.user.id, lot_id: state.currentLotId, file_path: path });
+
+      // >>> añade al buffer para analizar SOLO lo nuevo
+      if (!Array.isArray(state.pendingPhotos)) state.pendingPhotos = [];
+      state.pendingPhotos.push(path);
     }
-    toast("Fotos cargadas");
-  });
+  }
+  toast("Fotos cargadas");
+});
 }
 
 // Guardar resultado + generar y subir PDF si aprobado
