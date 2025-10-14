@@ -397,10 +397,17 @@ document.getElementById("btnRunVision")?.addEventListener("click", async ()=>{
       chatAdd("assistant", `Visión: input ${data.usage.input_tokens ?? "?"} / output ${data.usage.output_tokens ?? "?"} tokens (total ${data.usage.total_tokens ?? "?"}).`);
     }
   } catch (e) {
-    console.error(e);
-    box.textContent = "Error al analizar fotos.";
-    toast("Error en visión", false);
-  }
+  console.error(e);
+  box.textContent = "Error al analizar fotos.";
+  // Intenta leer el body de error para mostrar detalle
+  try {
+    const r2 = await fetch("/.netlify/functions/inspect-photos?lot_id="+encodeURIComponent(state.currentLotId)+"&debug=1");
+    const dbg = await r2.json();
+    console.log("debug:", dbg);
+  } catch {}
+  toast("Error en visión: " + e.message, false);
+}
+
 });
 
 // Elegir lote existente desde el selector
