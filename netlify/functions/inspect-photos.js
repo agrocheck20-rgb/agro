@@ -1,20 +1,22 @@
 // netlify/functions/inspect-photos.js
 exports.handler = async (event) => {
   try {
-    // ---- Query params ----
+    const isPost = event.httpMethod === "POST";
     const q = event.queryStringParameters || {};
-    const lotId   = q.lot_id   || null;   // UUID
-    const lotCode = q.lot_code || null;   // código humano (p.ej., Lote-001)
+    const body = isPost && event.body ? JSON.parse(event.body) : {};
+
+    // 1) Identificadores de lote
+    const lotId   = body.lot_id || q.lot_id || null;   // UUID
+    const lotCode = q.lot_code || null;                // opcional por GET
     const debug   = q.debug === "1";
 
-    // ---- Imports ----
+    // 2) Imports + clientes
     const { default: OpenAI } = await import("openai");
     const { createClient } = await import("@supabase/supabase-js");
-
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const supa   = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
 
-    // ---- Buscar el lote ----
+    // 3) Buscar lote (por id o por code)
     let lot = null;
     if (lotId) {
       const { data } = await supa.from("lots").select("*").eq("id", lotId).single();
@@ -24,51 +26,54 @@ exports.handler = async (event) => {
       const { data } = await supa.from("lots").select("*").eq("lot_code", lotCode).single();
       lot = data || null;
     }
-    if (!lot) return json(404, { error: "Lote no encontrado", hint: "Pasa ?lot_id=<uuid> o ?lot_code=<codigo>" });
+    if (!lot) return json(404, { error: "Lote no encontrado", hint: "Pasa lot_id (POST/GET) o lot_code (GET)" });
 
-    // ---- Traer fotos del lote ----
-    const { data: photos, error: photosErr } = await supa
-      .from("lot_photos")
-      .select("file_path, created_at")
-      .eq("lot_id", lot.id)
-      .order("created_at", { ascending: true });
+    // 4) Determinar qué fotos analizar
+    let photoPaths = Array.isArray(body.paths) && body.paths.length ? body.paths : null;
 
-    if (photosErr) return json(500, { error: "No se pudo listar fotos", details: photosErr.message });
-    if (!photos || photos.length === 0) {
-      return json(200, { ok: true, per_photo: [], summary: "No hay fotos en este lote." });
+    if (!photoPaths) {
+      // Fallback: usa todas las fotos del lote
+      const { data: photos, error: photosErr } = await supa
+        .from("lot_photos")
+        .select("file_path, created_at")
+        .eq("lot_id", lot.id)
+        .order("created_at", { ascending: true });
+
+      if (photosErr) return json(500, { error: "No se pudo listar fotos", details: photosErr.message });
+      photoPaths = (photos || []).map(p => p.file_path);
     }
 
-    // ---- Crear URLs firmadas (las usaremos como input_image) ----
+    if (!photoPaths || photoPaths.length === 0) {
+      return json(200, { ok: true, per_photo: [], summary: "No hay fotos para analizar." });
+    }
+
+    // 5) Firmar URLs (usaremos input_image con image_url STRING)
     const images = [];
-    for (const p of photos) {
-      const { data: signed, error: signErr } = await supa.storage.from("photos").createSignedUrl(p.file_path, 300);
+    for (const path of photoPaths) {
+      const { data: signed, error: signErr } = await supa.storage.from("photos").createSignedUrl(path, 300);
       if (signErr || !signed?.signedUrl) {
-        return json(500, { error: "No se pudo firmar URL de foto", path: p.file_path, details: signErr?.message });
+        return json(500, { error: "No se pudo firmar URL de foto", path, details: signErr?.message });
       }
-      images.push({ url: signed.signedUrl, path: p.file_path });
+      images.push({ url: signed.signedUrl, path });
     }
 
-    // ---- Modo debug: ver lote, fotos y env ----
-    if (debug) {
+    // Debug temprano
+    if (q.debug === "1") {
       return json(200, {
         ok: true,
         debug: {
           lot: { id: lot.id, code: lot.lot_code, product: lot.product },
-          photos: images.map(i => i.path),
-          env: {
-            hasOPENAI: !!process.env.OPENAI_API_KEY,
-            hasSERVICE_ROLE: !!process.env.SUPABASE_SERVICE_ROLE,
-            urlOK: !!process.env.SUPABASE_URL
-          }
+          photos: images.map(i => i.path)
         }
       });
     }
 
-    // ---- Prompt + schema ----
+    // 6) Prompt + schema (ESPAÑOL)
     const SYSTEM = `Eres un inspector de calidad para frutas frescas de exportación.
-- Identifica la fruta, evalúa madurez, detecta defectos (golpes, moho, cortes, decoloración, arrugas, desenfoque/iluminación) y decide si es apta para exportar.
-- Si hay duda (imagen borrosa/oscura), marca export_ready=false y explica.
-Devuelve JSON EXACTO según el schema.`;
+Responde SIEMPRE en español.
+- Identifica la fruta, evalúa la madurez, detecta defectos visibles (golpes, moho, cortes, decoloración, arrugas, enfoque/iluminación) y decide si es apta para exportar.
+- Si la evidencia es insuficiente, marca export_ready=false y explica brevemente en "notes".
+Devuelve JSON EXACTO según el schema. "notes" y "summary" van en español.`;
 
     const schema = {
       name: "VisionInspection",
@@ -100,7 +105,7 @@ Devuelve JSON EXACTO según el schema.`;
       }
     };
 
-    // ---- Construir input para la IA ----
+    // 7) Construir input para la IA
     const expected = (lot.product || "").toLowerCase();
     const userContent = [{
       type: "input_text",
@@ -108,16 +113,14 @@ Devuelve JSON EXACTO según el schema.`;
 `Lote: ${lot.lot_code || lot.id}
 Producto esperado: ${lot.product || "-"}
 Para cada imagen, devuelve: product_detected, confidence (0..1), ripeness (unripe|ripe|overripe|unknown),
-issues (array), export_ready (true/false) y notes (breve).`
+issues (array), export_ready (true/false) y notes (breve en español).`
     }];
 
-    // AÑADIR IMÁGENES como input_image (NO input_file)
     for (const img of images) {
-  userContent.push({ type: "input_image", image_url: img.url }); // <- debe ser STRING, no objeto
-}
+      userContent.push({ type: "input_image", image_url: img.url }); // image_url debe ser STRING
+    }
 
-
-    // ---- Llamar a OpenAI (Responses API con Structured Outputs) ----
+    // 8) Llamar a OpenAI (Structured Outputs)
     let resp;
     try {
       resp = await openai.responses.create({
@@ -132,7 +135,7 @@ issues (array), export_ready (true/false) y notes (breve).`
       return json(500, { error: "OpenAI fallo: " + String(e) });
     }
 
-    // ---- Parsear salida ----
+    // 9) Parsear salida
     let parsed = {};
     try {
       const raw = resp.output_text ?? (resp.output?.[0]?.content?.[0]?.text) ?? "{}";
@@ -141,7 +144,7 @@ issues (array), export_ready (true/false) y notes (breve).`
       return json(500, { error: "No pude parsear la salida de IA", raw: resp });
     }
 
-    // ---- Guardar en DB (lot_photo_reviews) ----
+    // 10) Guardar resultados en DB
     const rows = [];
     for (let i = 0; i < parsed.per_photo.length; i++) {
       const r = parsed.per_photo[i];
