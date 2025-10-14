@@ -229,7 +229,7 @@ exports.handler = async (event) => {
           // pdf => input_file (vision)
           const buf = await fetchArrayBuffer(signed.signedUrl);
           const file = await toFile(buf, row.file_path.split("/").pop() || "doc.pdf", { type: "application/pdf" });
-          const up = await openai.files.create({ file, purpose: "vision" });
+          const up = await openai.files.create({ file, purpose: "assistants" });
           inputs.push({ type: "input_file", file_id: up.id });
 
           // extra: intenta texto PDF
