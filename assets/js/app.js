@@ -4,7 +4,8 @@ const state = {
   currentLotId:null,
   requiredDocs:[], docTypesCache:null, countriesCache:null, productsCache:null,
   lotsCache:[]
-  pendingPhotos:[]
+  // ===== Vision (fotos) =====
+let pendingPhotos = [];   // almacena SOLO las fotos recién seleccionadas para análisis
 };
 
 function $(s){return document.querySelector(s)}
