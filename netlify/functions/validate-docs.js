@@ -63,6 +63,7 @@ async function generateCertificatePDF(payload) {
 }
 
 // ---------- Schema (Structured Outputs) ----------
+// ---------- Schema (Structured Outputs) ----------
 const validationSchema = {
   name: "DocMinExtract",
   schema: {
@@ -78,20 +79,33 @@ const validationSchema = {
               type: "object",
               properties: {
                 // CERT_ORIGEN
-                hs_code: { type: ["string","null"] },
-                origin_country: { type: ["string","null"] },
-                invoice_number: { type: ["string","null"] },
-                goods_description: { type: ["string","null"] },
+                hs_code:            { type: ["string","null"] },
+                origin_country:     { type: ["string","null"] },
+                invoice_number:     { type: ["string","null"] },
+                goods_description:  { type: ["string","null"] },
                 // FACTURA
-                consignee_name: { type: ["string","null"] },
+                consignee_name:      { type: ["string","null"] },
                 total_invoice_value: { type: ["number","string","null"] },
-                items_found: { type: ["number","null"] },
+                items_found:         { type: ["number","null"] },
                 // PACKING_LIST
-                packing_number: { type: ["string","null"] },
-                packing_date: { type: ["string","null"] },
-                packages_count: { type: ["number","string","null"] },
+                packing_number:   { type: ["string","null"] },
+                packing_date:     { type: ["string","null"] },
+                packages_count:   { type: ["number","string","null"] },
                 net_weight_total: { type: ["number","string","null"] }
               },
+              required: [
+                "hs_code",
+                "origin_country",
+                "invoice_number",
+                "goods_description",
+                "consignee_name",
+                "total_invoice_value",
+                "items_found",
+                "packing_number",
+                "packing_date",
+                "packages_count",
+                "net_weight_total"
+              ],
               additionalProperties: false
             }
           },
@@ -104,6 +118,7 @@ const validationSchema = {
     additionalProperties: false
   }
 };
+
 
 // ---------- Prompt ----------
 const SYSTEM_PROMPT = `
