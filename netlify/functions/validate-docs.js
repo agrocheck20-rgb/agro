@@ -17,21 +17,18 @@ async function fetchArrayBuffer(url) {
   return Buffer.from(ab);
 }
 
+// intenta extraer texto embebido de PDF — si pdf-parse no está instalado, no rompe
 async function extractPdfTextFromSignedUrl(signedUrl) {
-  const { default: pdfParse } = await import("pdf-parse");
-  const buf = await fetchArrayBuffer(signedUrl);
-  const res = await pdfParse(buf);
-  return res?.text || "";
+  try {
+    const { default: pdfParse } = await import("pdf-parse");
+    const buf = await fetchArrayBuffer(signedUrl);
+    const res = await pdfParse(buf);
+    return res?.text || "";
+  } catch {
+    return ""; // sin OCR extra, seguimos igual
+  }
 }
 
-// Ya no generamos PDF en el servidor.
-// Dejamos un stub por compatibilidad.
-async function generateCertificatePDF(payload) {
-  return null; // no se usa aquí
-}
-
-
-// ---------- Schema (Structured Outputs) ----------
 // ---------- Schema (Structured Outputs) ----------
 const validationSchema = {
   name: "DocMinExtract",
@@ -62,18 +59,11 @@ const validationSchema = {
                 packages_count:   { type: ["number","string","null"] },
                 net_weight_total: { type: ["number","string","null"] }
               },
+              // marcamos todos como requeridos para que el modelo siempre intente devolverlos
               required: [
-                "hs_code",
-                "origin_country",
-                "invoice_number",
-                "goods_description",
-                "consignee_name",
-                "total_invoice_value",
-                "items_found",
-                "packing_number",
-                "packing_date",
-                "packages_count",
-                "net_weight_total"
+                "hs_code","origin_country","invoice_number","goods_description",
+                "consignee_name","total_invoice_value","items_found",
+                "packing_number","packing_date","packages_count","net_weight_total"
               ],
               additionalProperties: false
             }
@@ -87,7 +77,6 @@ const validationSchema = {
     additionalProperties: false
   }
 };
-
 
 // ---------- Prompt ----------
 const SYSTEM_PROMPT = `
@@ -128,7 +117,7 @@ function hasText(v){ return v!=null && String(v).trim().length>0; }
 function toNum(v){
   if (v==null) return null;
   const t = String(v).replace(/[^\d.,-]/g,"");
-  // intenta con coma como decimal
+  // intenta coma decimal
   const n1 = Number(t.replace(/\./g,"").replace(",","."));
   if (!Number.isNaN(n1)) return n1;
   const n2 = Number(t.replace(/,/g,""));
@@ -167,14 +156,13 @@ exports.handler = async (event) => {
     if (eLot || !lot) return json(404, { error: "Lote no encontrado" });
     const { data: profile } = await supa.from("profiles").select("*").eq("id", lot.user_id).single();
 
-    // 2) Requisitos (sólo los nuevos tipos)
+    // 2) Requisitos (nuestros 3 docs por defecto)
     let { data: reqs } = await supa
       .from("doc_requirements")
       .select("doc_type, required")
       .eq("product", lot.product)
       .eq("country_code", lot.destination_country);
 
-    // Fallback fijo a nuestros 3 docs si no hay config
     const FALLBACK_REQS = [
       { doc_type: "CERT_ORIGEN", required: true },
       { doc_type: "FACTURA", required: true },
@@ -182,15 +170,20 @@ exports.handler = async (event) => {
     ];
     if (!Array.isArray(reqs) || reqs.length === 0) reqs = FALLBACK_REQS;
 
-    // 3) Documentos del lote (en bucket "docs")
+    // 3) Documentos del lote
     const { data: docs } = await supa.from("documents").select("*").eq("lot_id", lotId);
-    // indexar por tipo
     const byType = {};
     for (const d of docs || []) (byType[d.doc_type] ||= []).push(d);
+    // ordena descendente por fecha de creación para quedarte con el más reciente
+    for (const t of Object.keys(byType)) {
+      byType[t].sort((a,b)=>(new Date(b.created_at||0))-(new Date(a.created_at||0)));
+      byType[t] = byType[t].slice(0,1); // toma solo 1 archivo por tipo
+    }
 
-    // 4) Preparar evidencias por documento (PDF -> input_file | imagen -> input_image)
-    const perDocInputs = [];         // [{ doc_type, inputs:[ {type, image_url|file_id} ] }]
-    const perDocText   = {};         // para OCR textual adicional (no imprescindible)
+    // 4) Preparar inputs (PDF -> input_file (purpose: vision) | imagen -> input_image)
+    const perDocInputs = [];   // [{ doc_type, inputs:[{type, image_url|file_id}] }]
+    const perDocText   = {};   // texto PDF embebido opcional
+
     for (const r of reqs) {
       const t = r.doc_type;
       if (!["CERT_ORIGEN","FACTURA","PACKING_LIST"].includes(t)) continue;
@@ -206,21 +199,28 @@ exports.handler = async (event) => {
         const { data: signed } = await supa.storage.from("docs").createSignedUrl(row.file_path, 300);
         if (!signed?.signedUrl) continue;
 
-        if (["jpg","jpeg","png","webp"].includes(ext)) {
-          // imagen => input_image
+        if (["jpg","jpeg","png","webp","gif"].includes(ext)) {
           inputs.push({ type: "input_image", image_url: signed.signedUrl });
-        } else {
-          // pdf => input_file (vision)
+        } else if (ext === "pdf") {
           const buf = await fetchArrayBuffer(signed.signedUrl);
-          const file = await toFile(buf, row.file_path.split("/").pop() || "doc.pdf", { type: "application/pdf" });
-          const up = await openai.files.create({ file, purpose: "assistants" });
+          const file = await toFile(
+            buf,
+            row.file_path.split("/").pop() || "doc.pdf",
+            { type: "application/pdf" }
+          );
+          // OJO: purpose 'vision' para que la Responses API lo use como input_file OCR
+          const up = await openai.files.create({ file, purpose: "vision" });
           inputs.push({ type: "input_file", file_id: up.id });
 
-          // extra: intenta texto PDF
+          // (opcional) intenta extraer texto embebido
           try { concatText += `\n[${row.file_path}]\n${await extractPdfTextFromSignedUrl(signed.signedUrl)}\n`; }
-          catch { /* ignore */ }
+          catch {}
+        } else {
+          // otros formatos -> intentar como imagen por URL (si es renderizable)
+          inputs.push({ type: "input_image", image_url: signed.signedUrl });
         }
       }
+
       perDocInputs.push({ doc_type:t, inputs });
       if (concatText) perDocText[t] = concatText;
     }
@@ -243,7 +243,6 @@ Contexto:
 ${JSON.stringify(context, null, 2)}`
     }];
 
-    // añade inputs por cada documento
     for (const block of perDocInputs) {
       if (!block.inputs.length) continue;
       userContent.push({ type: "input_text", text: `Documento: ${block.doc_type}`});
@@ -253,14 +252,22 @@ ${JSON.stringify(context, null, 2)}`
       }
     }
 
-    // 6) Llamada a OpenAI (Structured Outputs)
+    // 6) OpenAI (Structured Outputs)
+    const { default: OpenAIClient } = await import("openai"); // (no imprescindible, pero mantiene consistencia ESM)
     const response = await openai.responses.create({
       model: "gpt-4o-mini",
       input: [
         { role: "system", content: [{ type: "input_text", text: SYSTEM_PROMPT }] },
         { role: "user",   content: userContent }
       ],
-      text: { format: { type: "json_schema", name: validationSchema.name, schema: validationSchema.schema, strict: true } }
+      text: {
+        format: {
+          type: "json_schema",
+          name: validationSchema.name,
+          schema: validationSchema.schema,
+          strict: true
+        }
+      }
     });
 
     let parsed = {};
@@ -317,19 +324,15 @@ ${JSON.stringify(context, null, 2)}`
     const decision = anyObs ? "pendiente" : "aprobado";
     const observations = anyObs ? "Faltan campos en uno o más documentos." : "Documentación mínima OK.";
 
-    // 8) Si aprobado => generar PDF + actualizar lote
-    let certificate_path = null;
-// Nota: por simplicidad ya NO generamos el PDF aquí.
-// El front-end (botón “Guardar resultado + generar PDF”) seguirá
-// creando y subiendo el PDF con jsPDF como ya lo hacía.
+    // 8) Actualizar lote (ya no generamos PDF aquí)
+    const patch = { approved: !anyObs, status: decision, observations };
+    await supa.from("lots").update(patch).eq("id", lotId);
+
     // contar uso IA
     await supa.from("profiles").update({ ia_used: (profile?.ia_used || 0) + 1 }).eq("id", lot.user_id);
 
     // eventos
     await supa.from("lot_events").insert({ user_id: lot.user_id, lot_id: lotId, event_type: "ai_checked", data: { per_doc: parsed.per_doc || [] } });
-    if (certificate_path) {
-      await supa.from("lot_events").insert({ user_id: lot.user_id, lot_id: lotId, event_type: "pdf_generated", data: { certificate_path } });
-    }
 
     const stages = [
       { step: "lectura",    label: "Lectura de documentos",       status: "done" },
@@ -345,12 +348,13 @@ ${JSON.stringify(context, null, 2)}`
       checklist,
       stages,
       observations,
-      certificate_path
+      certificate_path: null // el PDF lo genera el front con jsPDF
     });
 
   } catch (err) {
+    // MÁS detalle para que el front vea el error real
     console.error("validate-docs error:", err);
-    return json(500, { error: "Error en validación IA", details: String(err) });
+    return json(500, { error: "Error en validación IA", details: (err?.message || String(err)), stack: err?.stack });
   }
 };
 
