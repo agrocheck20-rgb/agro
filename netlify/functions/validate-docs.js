@@ -1,8 +1,6 @@
 // netlify/functions/validate-docs.js
 // CJS (CommonJS) con imports ESM dinámicos cuando hace falta
 
-const PDFDocument = require("pdfkit");
-
 // ---------- Helpers de respuesta ----------
 function json(status, obj) {
   return {
@@ -27,40 +25,76 @@ async function extractPdfTextFromSignedUrl(signedUrl) {
 }
 
 async function generateCertificatePDF(payload) {
-  return await new Promise((resolve) => {
-    const doc = new PDFDocument({ size: "A4", margin: 50 });
-    const chunks = [];
-    doc.on("data", (d) => chunks.push(d));
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
+  // Usamos pdf-lib (no requiere archivos .afm en disco)
+  const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
 
-    doc.fontSize(18).font("Times-Bold").text(
-      "Constancia de Aprobación de Calidad y Documentación",
-      { align: "center" }
-    );
-    doc.moveDown();
-    doc.fontSize(12).font("Times-Roman");
-    const line = (label, value) => {
-      doc.font("Times-Bold").text(label, { continued: true })
-         .font("Times-Roman").text(" " + (value ?? "-"));
-    };
-    doc.moveDown();
-    line("Certificado Nº:", payload.certificate_number ?? "—");
-    line("Empresa:", payload.empresa);
-    line("RUC:", payload.ruc ?? "—");
-    line("Producto:", payload.producto);
-    line("Variedad:", payload.variedad ?? "—");
-    line("Lote:", payload.lote);
-    line("Origen:", payload.origen ?? "—");
-    line("Destino:", payload.destino);
-    line("Fecha de emisión:", payload.fecha);
-    line("Estado:", "APROBADO");
-    doc.moveDown().font("Times-Bold").text("Observaciones:");
-    doc.font("Times-Roman").text(payload.observaciones || "Sin observaciones");
-    doc.moveDown().font("Times-Italic").fontSize(10)
-       .text("Documento generado por AgroCheck.");
-    doc.end();
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage([595.28, 841.89]); // A4 en puntos
+  const { width, height } = page.getSize();
+
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  let y = height - 72; // margen superior
+
+  // Título
+  page.drawText("Constancia de Aprobación de Calidad y Documentación", {
+    x: 50, y, size: 16, font: bold, color: rgb(0, 0.2, 0.1)
   });
+
+  y -= 28;
+
+  const drawLine = (label, value, isBold=false) => {
+    y -= 18;
+    const txt = `${label} ${value ?? "—"}`;
+    page.drawText(txt, { x: 50, y, size: 12, font: isBold ? bold : font });
+  };
+
+  drawLine("Certificado Nº:", payload.certificate_number ?? "—");
+  drawLine("Empresa:", payload.empresa);
+  drawLine("RUC:", payload.ruc ?? "—");
+  drawLine("Producto:", payload.producto);
+  drawLine("Variedad:", payload.variedad ?? "—");
+  drawLine("Lote:", payload.lote);
+  drawLine("Origen:", payload.origen ?? "—");
+  drawLine("Destino:", payload.destino);
+  drawLine("Fecha de emisión:", payload.fecha);
+  drawLine("Estado:", "APROBADO", true);
+
+  y -= 26;
+  page.drawText("Observaciones:", { x: 50, y, size: 12, font: bold });
+  y -= 18;
+
+  // Observaciones con salto de línea simple
+  const obs = (payload.observaciones || "Sin observaciones").toString();
+  const maxWidth = width - 100;
+  const words = obs.split(" ");
+  let line = "";
+  for (const w of words) {
+    const test = line ? line + " " + w : w;
+    const testWidth = font.widthOfTextAtSize(test, 12);
+    if (testWidth > maxWidth) {
+      page.drawText(line, { x: 50, y, size: 12, font });
+      y -= 14;
+      line = w;
+    } else {
+      line = test;
+    }
+  }
+  if (line) {
+    page.drawText(line, { x: 50, y, size: 12, font });
+    y -= 14;
+  }
+
+  y -= 10;
+  page.drawText("Documento generado por AgroCheck.", {
+    x: 50, y, size: 10, font, color: rgb(0.3,0.3,0.3)
+  });
+
+  const bytes = await pdfDoc.save();
+  return Buffer.from(bytes); // devolvemos Buffer para subir a Supabase Storage
 }
+
 
 // ---------- Schema (Structured Outputs) ----------
 // ---------- Schema (Structured Outputs) ----------
