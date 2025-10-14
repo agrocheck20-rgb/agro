@@ -1,7 +1,115 @@
-.navbtn{ text-align:left; padding:.6rem .75rem; border-radius:.75rem; border:1px solid transparent; }
-.navbtn:hover{ background:#f8fafc; border-color:#e2e8f0; }
-.card{ background:white; border:1px solid #e2e8f0; border-radius:1rem; padding:1rem; }
-.card-title{ font-weight:600; margin-bottom:.5rem; }
-.stat{ display:flex; flex-direction:column; gap:.25rem; }
-.stat-label{ font-size:.8rem; color:#64748b; }
-.stat-value{ font-size:1.6rem; font-weight:700; }
+/* ===========================
+   AgroCheck – UI Skin (verde)
+   =========================== */
+
+/* Paleta */
+:root {
+  --agro-50:  #f0fdf4;
+  --agro-100: #dcfce7;
+  --agro-200: #bbf7d0;
+  --agro-300: #86efac;
+  --agro-400: #4ade80;
+  --agro-500: #22c55e; /* principal */
+  --agro-600: #16a34a; /* hover */
+  --agro-700: #15803d;
+  --agro-800: #166534;
+  --agro-900: #14532d;
+
+  --ink-900: #0b1220;
+  --ink-700: #1f2937;
+  --ink-500: #475569;
+  --ink-300: #94a3b8;
+  --ink-200: #cbd5e1;
+  --ink-100: #e2e8f0;
+  --surface: #ffffff;
+  --surface-alt: #f8fafc;
+
+  --ring: rgba(34, 197, 94, .35);
+  --shadow: 0 10px 25px rgba(16,24,40,.06), 0 2px 6px rgba(16,24,40,.05);
+}
+
+body.theme-agro {
+  background: var(--surface-alt);
+}
+
+/* ------------ Cards ------------ */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--ink-100);
+  border-radius: 18px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+.card-title {
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--ink-700);
+  margin-bottom: 10px;
+}
+
+/* ------------ Sidebar ------------ */
+#sidebar {
+  background:
+    radial-gradient(1200px 300px at top left, rgba(34,197,94,.08), transparent 40%),
+    linear-gradient(180deg, #ffffff, #fbfdfc);
+}
+#sidebar .navbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .6rem .8rem;
+  border-radius: 12px;
+  color: #0f172a;
+  width: 100%;
+  transition: transform .06s ease, background .2s ease, box-shadow .2s ease;
+}
+#sidebar .navbtn:hover {
+  background: var(--agro-50);
+  box-shadow: inset 0 0 0 1px var(--agro-200);
+}
+#sidebar .navbtn.active,
+#sidebar .navbtn.bg-slate-100 {
+  background: var(--agro-100) !important;
+  box-shadow: inset 0 0 0 1px var(--agro-300);
+}
+
+/* ------------ Topbar ------------ */
+header {
+  box-shadow: 0 2px 0 rgba(16,24,40,.04);
+}
+header .brand-badge {
+  display:inline-flex; align-items:center; gap:.5rem;
+  padding:.35rem .6rem; border-radius:999px;
+  background: var(--agro-50); color: var(--agro-700);
+  border: 1px solid var(--agro-200);
+}
+
+/* ------------ Buttons ------------ */
+.btn {
+  display:inline-flex; align-items:center; justify-content:center;
+  border-radius: 12px; padding: .55rem 1rem; font-weight: 600;
+  transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+  border: 1px solid var(--ink-100);
+}
+.btn:active { transform: translateY(1px); }
+.btn:focus { outline: none; box-shadow: 0 0 0 4px var(--ring); }
+
+.btn-primary {
+  background: var(--agro-600); color: #fff; border-color: var(--agro-600);
+}
+.btn-primary:hover { background: var(--agro-700); }
+
+.btn-ghost {
+  background: #fff; color: var(--ink-700);
+}
+.btn-ghost:hover {
+  background: var(--agro-50); border-color: var(--agro-200);
+}
+
+/* ------------ Inputs ------------ */
+input, select, textarea {
+  border-radius: 12px !important;
+  border-color: var(--ink-100) !important;
+}
+input:focus, select:focus, textarea:focus {
+  box-shad
