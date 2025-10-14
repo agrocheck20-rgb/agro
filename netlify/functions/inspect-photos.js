@@ -113,8 +113,9 @@ issues (array), export_ready (true/false) y notes (breve).`
 
     // AÑADIR IMÁGENES como input_image (NO input_file)
     for (const img of images) {
-      userContent.push({ type: "input_image", image_url: { url: img.url } });
-    }
+  userContent.push({ type: "input_image", image_url: img.url }); // <- debe ser STRING, no objeto
+}
+
 
     // ---- Llamar a OpenAI (Responses API con Structured Outputs) ----
     let resp;
