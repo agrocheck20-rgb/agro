@@ -4,6 +4,7 @@ const state = {
   currentLotId:null,
   requiredDocs:[], docTypesCache:null, countriesCache:null, productsCache:null,
   lotsCache:[]
+  pendingPhotos:[]
 };
 
 function $(s){return document.querySelector(s)}
@@ -371,9 +372,27 @@ document.getElementById("btnRunVision")?.addEventListener("click", async ()=>{
   if (!state.currentLotId) return toast("Primero guarda o elige un lote", false);
   const box = document.getElementById("visionResults");
   box.textContent = "Analizando fotos…";
+
   try {
-    const r = await fetch("/.netlify/functions/inspect-photos?lot_id="+encodeURIComponent(state.currentLotId));
-    const data = await r.json();
+    let r, data;
+    const hasNew = Array.isArray(state.pendingPhotos) && state.pendingPhotos.length > 0;
+
+    if (hasNew) {
+      // Solo las fotos recién subidas
+      r = await fetch("/.netlify/functions/inspect-photos", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ lot_id: state.currentLotId, paths: state.pendingPhotos })
+      });
+      data = await r.json();
+      // limpia el buffer para no reanalizar en la próxima
+      state.pendingPhotos = [];
+    } else {
+      // Fallback: todas las fotos del lote (comportamiento anterior)
+      r = await fetch("/.netlify/functions/inspect-photos?lot_id="+encodeURIComponent(state.currentLotId));
+      data = await r.json();
+    }
+
     if (!r.ok) throw new Error(data?.error || "Fallo visión");
 
     const chips = (data.per_photo||[]).map(p=>{
@@ -392,13 +411,13 @@ document.getElementById("btnRunVision")?.addEventListener("click", async ()=>{
     }).join("");
 
     box.innerHTML = (chips || "Sin resultados") + (data.summary ? `<div class="mt-2 text-slate-600">${data.summary}</div>` : "");
-
-    if (data.usage) {
-      chatAdd("assistant", `Visión: input ${data.usage.input_tokens ?? "?"} / output ${data.usage.output_tokens ?? "?"} tokens (total ${data.usage.total_tokens ?? "?"}).`);
-    }
   } catch (e) {
-  console.error(e);
-  box.textContent = "Error al analizar fotos.";
+    console.error(e);
+    box.textContent = "Error al analizar fotos.";
+    toast("Error en visión: " + e.message, false);
+  }
+});
+
   // Intenta leer el body de error para mostrar detalle
   try {
     const r2 = await fetch("/.netlify/functions/inspect-photos?lot_id="+encodeURIComponent(state.currentLotId)+"&debug=1");
@@ -490,6 +509,8 @@ async function renderRequirements(){
       const { error } = await sb.storage.from("photos").upload(path, f, { upsert:true });
       if(!error){
         await sb.from("lot_photos").insert({ user_id: state.user.id, lot_id: state.currentLotId, file_path: path });
+        if (!state.pendingPhotos) state.pendingPhotos = [];
+state.pendingPhotos.push(path); // guarda las que acabas de subir
       }
     }
     toast("Fotos cargadas");
