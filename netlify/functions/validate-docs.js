@@ -1,9 +1,6 @@
 // netlify/functions/validate-docs.js
-// CJS (CommonJS) con imports ESM dinámicos cuando hace falta
+// Versión exprés anti-timeout (Netlify). Procesa 1 archivo por tipo y no genera PDF en el server.
 
-const PDFDocument = require("pdfkit");
-
-// ===== Utilidades =====
 function json(status, obj) {
   return {
     statusCode: status,
@@ -14,62 +11,12 @@ function json(status, obj) {
 
 async function fetchArrayBuffer(url) {
   const r = await fetch(url);
-  if (!r.ok) {
-    const t = await r.text().catch(()=> "");
-    throw new Error(`No se pudo descargar archivo (${r.status}) ${t}`);
-  }
+  if (!r.ok) throw new Error(`No se pudo descargar archivo (${r.status})`);
   const ab = await r.arrayBuffer();
   return Buffer.from(ab);
 }
 
-async function extractPdfTextFromSignedUrl(signedUrl) {
-  const { default: pdfParse } = await import("pdf-parse");
-  const buf = await fetchArrayBuffer(signedUrl);
-  const res = await pdfParse(buf);
-  return res?.text || "";
-}
-
-// Generador de PDF (con fuentes estándar integradas en PDFKit)
-async function generateCertificatePDF(payload) {
-  return await new Promise((resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ size: "A4", margin: 50 });
-      const chunks = [];
-      doc.on("data", (d) => chunks.push(d));
-      doc.on("end", () => resolve(Buffer.concat(chunks)));
-
-      doc.fontSize(18).font("Times-Bold").text(
-        "Constancia de Aprobación de Calidad y Documentación",
-        { align: "center" }
-      );
-      doc.moveDown();
-      doc.fontSize(12).font("Times-Roman");
-      const line = (label, value) => {
-        doc.font("Times-Bold").text(label, { continued: true })
-           .font("Times-Roman").text(" " + (value ?? "-"));
-      };
-      doc.moveDown();
-      line("Certificado Nº:", payload.certificate_number ?? "—");
-      line("Empresa:", payload.empresa);
-      line("RUC:", payload.ruc ?? "—");
-      line("Producto:", payload.producto);
-      line("Variedad:", payload.variedad ?? "—");
-      line("Lote:", payload.lote);
-      line("Origen:", payload.origen ?? "—");
-      line("Destino:", payload.destino);
-      line("Fecha de emisión:", payload.fecha);
-      line("Estado:", "APROBADO");
-
-      doc.moveDown().font("Times-Bold").text("Observaciones:");
-      doc.font("Times-Roman").text(payload.observaciones || "Sin observaciones");
-      doc.moveDown().font("Times-Italic").fontSize(10)
-         .text("Documento generado por AgroCheck.");
-      doc.end();
-    } catch (e) { reject(e); }
-  });
-}
-
-// ===== Schema (Structured Outputs) =====
+// ---------- Schema para Structured Outputs ----------
 const validationSchema = {
   name: "DocMinExtract",
   schema: {
@@ -84,34 +31,22 @@ const validationSchema = {
             extracted: {
               type: "object",
               properties: {
-                // CERT_ORIGEN
                 hs_code:            { type: ["string","null"] },
                 origin_country:     { type: ["string","null"] },
                 invoice_number:     { type: ["string","null"] },
                 goods_description:  { type: ["string","null"] },
-                // FACTURA
                 consignee_name:      { type: ["string","null"] },
                 total_invoice_value: { type: ["number","string","null"] },
                 items_found:         { type: ["number","null"] },
-                // PACKING_LIST
                 packing_number:   { type: ["string","null"] },
                 packing_date:     { type: ["string","null"] },
                 packages_count:   { type: ["number","string","null"] },
                 net_weight_total: { type: ["number","string","null"] }
               },
-              // Nota: ponemos todos como "required" para satisfacer JSON Schema estricto del Responses API
               required: [
-                "hs_code",
-                "origin_country",
-                "invoice_number",
-                "goods_description",
-                "consignee_name",
-                "total_invoice_value",
-                "items_found",
-                "packing_number",
-                "packing_date",
-                "packages_count",
-                "net_weight_total"
+                "hs_code","origin_country","invoice_number","goods_description",
+                "consignee_name","total_invoice_value","items_found",
+                "packing_number","packing_date","packages_count","net_weight_total"
               ],
               additionalProperties: false
             }
@@ -126,41 +61,32 @@ const validationSchema = {
   }
 };
 
-// ===== Prompt =====
 const SYSTEM_PROMPT = `
 Eres un verificador de documentación de exportación. Responde SIEMPRE en español.
-Lee los documentos adjuntos (PDF o imágenes) con OCR si hace falta y EXTRAe SOLO los campos solicitados por documento.
-Normaliza antes de validar:
-
-- HS: elimina todo lo que no sea dígito y usa los primeros 6-8 dígitos (p.ej. "0804.40.00" => "080440").
-- País de origen Perú: acepta "PE", "Peru", "Perú", "PE (Perú)" => "PE".
-- Fechas: acepta dd/mm/aaaa o similares; devuelve en el mismo formato que encuentres.
-- Montos: extrae dígitos con separadores; devuelve número o string numérico.
-
-Para cada documento devuélveme un objeto "extracted" con EXACTAMENTE estos campos:
+Lee los documentos adjuntos (PDF o imágenes) y EXTRAe SOLO estos campos por documento:
 
 CERT_ORIGEN:
-  - hs_code (string, 6+ dígitos tras normalización)
-  - origin_country (string, esperable "PE")
-  - invoice_number (string)
-  - goods_description (string)
+  - hs_code (6+ dígitos limpios, ej: 080440)
+  - origin_country (esperado "PE")
+  - invoice_number
+  - goods_description
 
 FACTURA:
-  - invoice_number (string)
-  - consignee_name (string)
-  - total_invoice_value (number o string numérico)
-  - items_found (integer; cantidad de renglones de ítems detectados)
+  - invoice_number
+  - consignee_name
+  - total_invoice_value (número o string numérico)
+  - items_found (entero: cantidad de renglones de ítems)
 
 PACKING_LIST:
-  - packing_number (string)
-  - packing_date (string fecha)
-  - packages_count (number o string numérico)
-  - net_weight_total (number o string numérico, preferible en kg)
+  - packing_number
+  - packing_date
+  - packages_count (número/string numérico)
+  - net_weight_total (número/string numérico)
 
-Si un valor no existe en el documento, deja el campo vacío o null. NO inventes datos.
-Devuelve SOLO JSON según el schema.`;
+Si un valor no existe en el documento, pon null. NO inventes.
+Devuelve SOLO JSON conforme al schema.`;
 
-// ===== Validaciones mínimas =====
+// ---------- Validaciones mínimas ----------
 function hasText(v){ return v!=null && String(v).trim().length>0; }
 function toNum(v){
   if (v==null) return null;
@@ -182,8 +108,8 @@ function normPE(s){
   return String(s).toUpperCase();
 }
 
-// ============== HANDLER ==============
 exports.handler = async (event) => {
+  const start = Date.now();
   try {
     // ESM dinámicos
     const { default: OpenAI } = await import("openai");
@@ -200,129 +126,94 @@ exports.handler = async (event) => {
 
     // 1) Lote + perfil
     const { data: lot, error: eLot } = await supa.from("lots").select("*").eq("id", lotId).single();
-    if (eLot || !lot) return json(404, { error: "Lote no encontrado", details: eLot?.message });
+    if (eLot || !lot) return json(404, { error: "Lote no encontrado" });
 
-    const { data: profile, error: eProf } = await supa.from("profiles").select("*").eq("id", lot.user_id).single();
-    if (eProf || !profile) return json(500, { error: "Perfil no encontrado", details: eProf?.message });
+    const { data: profile } = await supa.from("profiles").select("*").eq("id", lot.user_id).single();
 
-    // 2) Requisitos (solo CERT_ORIGEN, FACTURA, PACKING_LIST)
-    let { data: reqs, error: eReqs } = await supa
-      .from("doc_requirements")
-      .select("doc_type, required")
-      .eq("product", lot.product)
-      .eq("country_code", lot.destination_country);
-
-    if (eReqs) console.error("doc_requirements error:", eReqs);
-
-    const FALLBACK_REQS = [
+    // 2) Requisitos (solo 3 tipos)
+    let reqs = [
       { doc_type: "CERT_ORIGEN", required: true },
       { doc_type: "FACTURA", required: true },
       { doc_type: "PACKING_LIST", required: true }
     ];
-    if (!Array.isArray(reqs) || reqs.length === 0) reqs = FALLBACK_REQS;
 
-    // 3) Documentos del lote
-    const { data: docs, error: eDocs } = await supa.from("documents").select("*").eq("lot_id", lotId);
-    if (eDocs) console.error("documents error:", eDocs);
-
+    // 3) Documentos del lote (solo 1 archivo por tipo para evitar timeout)
+    const { data: docs } = await supa.from("documents").select("*").eq("lot_id", lotId);
     const byType = {};
-    for (const d of (docs || [])) (byType[d.doc_type] ||= []).push(d);
+    for (const d of (docs || [])) {
+      if (!byType[d.doc_type]) byType[d.doc_type] = [];
+      byType[d.doc_type].push(d);
+    }
 
-    // 4) Evidencias: imagen -> input_image; cualquier otro (PDF) -> input_file (purpose: "vision")
-    const perDocInputs = [];   // [{ doc_type, inputs:[ {type, image_url|file_id} ] }]
-    const perDocText   = {};   // OCR adicional (texto PDF, opcional)
-
+    // 4) Evidencias: 1 archivo por tipo (imagen => input_image, PDF => input_file purpose:"vision")
+    const perDocInputs = [];
     for (const r of reqs) {
       const t = r.doc_type;
-      if (!["CERT_ORIGEN","FACTURA","PACKING_LIST"].includes(t)) continue;
-
-      const rows = byType[t] || [];
-      if (rows.length === 0) { perDocInputs.push({ doc_type:t, inputs:[] }); continue; }
-
+      const list = (byType[t] || []).slice(0,1); // <- SOLO 1
       const inputs = [];
-      let concatText = "";
-
-      for (const row of rows) {
+      for (const row of list) {
         const ext = (row.file_path || "").toLowerCase().split(".").pop();
-        const { data: signed, error: eSign } = await supa.storage.from("docs").createSignedUrl(row.file_path, 300);
-        if (eSign || !signed?.signedUrl) {
-          console.error("signedUrl error:", eSign);
-          continue;
-        }
+        const { data: signed } = await supa.storage.from("docs").createSignedUrl(row.file_path, 300);
+        if (!signed?.signedUrl) continue;
 
         if (["jpg","jpeg","png","webp","gif"].includes(ext)) {
           inputs.push({ type: "input_image", image_url: signed.signedUrl });
-          continue;
-        }
-
-        try {
+        } else {
+          // PDF u otros -> input_file con purpose:"vision"
           const buf  = await fetchArrayBuffer(signed.signedUrl);
           const name = row.file_path.split("/").pop() || "doc.bin";
           const mime = (ext === "pdf") ? "application/pdf" : "application/octet-stream";
           const file = await toFile(buf, name, { type: mime });
-          const up   = await openai.files.create({ file, purpose: "vision" }); // <== IMPORTANTE
+          const up   = await openai.files.create({ file, purpose: "vision" });
           inputs.push({ type: "input_file", file_id: up.id });
-
-          if (ext === "pdf") {
-            try { concatText += `\n[${row.file_path}]\n${await extractPdfTextFromSignedUrl(signed.signedUrl)}\n`; } catch {}
-          }
-        } catch (e) {
-          console.error("upload to OpenAI (vision) failed:", e?.message || e);
         }
       }
-
-      perDocInputs.push({ doc_type:t, inputs });
-      if (concatText) perDocText[t] = concatText;
+      perDocInputs.push({ doc_type: t, inputs });
     }
 
-    // 5) Input a OpenAI
+    // 5) Build input para OpenAI (ligero)
     const context = {
       lote: {
         product: lot.product, variety: lot.variety, lot_code: lot.lot_code,
-        origin_region: lot.origin_region, origin_province: lot.origin_province,
-        destination_country: lot.destination_country,
+        destination_country: lot.destination_country
       },
-      requirements: reqs
+      // pasamos solo los nombres de archivo para ayudar al LLM a saber qué recibió
+      files: perDocInputs.map(b => ({
+        doc_type: b.doc_type,
+        count: b.inputs.length
+      }))
     };
 
     const userContent = [{
       type: "input_text",
-      text:
-`Valida SOLO cuatro campos por documento (según SYSTEM_PROMPT) para el lote ${lot.lot_code || lot.id}.
-Contexto:
-${JSON.stringify(context, null, 2)}`
+      text: `Contexto:\n${JSON.stringify(context)}\nAhora extrae los 4 campos por documento según el SYSTEM_PROMPT.`
     }];
-
     for (const block of perDocInputs) {
       if (!block.inputs.length) continue;
       userContent.push({ type: "input_text", text: `Documento: ${block.doc_type}`});
       for (const inp of block.inputs) userContent.push(inp);
-      if (perDocText[block.doc_type]) {
-        userContent.push({ type: "input_text", text: `Texto OCR (si ayuda):\n${perDocText[block.doc_type].slice(0, 6000)}` });
-      }
     }
 
-    // 6) OpenAI (Structured Outputs) con manejo de errores claro
+    // 6) Llamada a OpenAI con timeout suave (22s) para esquivar 504
+    const callLLM = openai.responses.create({
+      model: "gpt-4o-mini",
+      input: [
+        { role: "system", content: [{ type: "input_text", text: SYSTEM_PROMPT }] },
+        { role: "user",   content: userContent }
+      ],
+      text: { format: { type: "json_schema", name: validationSchema.name, schema: validationSchema.schema, strict: true } }
+    });
+
+    const timeout = new Promise((_, rej) =>
+      setTimeout(() => rej(new Error("Tiempo de extracción excedido (intenta con archivos más livianos o 1 archivo por tipo).")), 22000)
+    );
+
     let parsed = { per_doc: [] };
-    try {
-      const response = await openai.responses.create({
-        model: "gpt-4o-mini",
-        input: [
-          { role: "system", content: [{ type: "input_text", text: SYSTEM_PROMPT }] },
-          { role: "user",   content: userContent }
-        ],
-        text: { format: { type: "json_schema", name: validationSchema.name, schema: validationSchema.schema, strict: true } }
-      });
+    const response = await Promise.race([callLLM, timeout]);
+    const raw = response.output_text ?? (response.output?.[0]?.content?.[0]?.text) ?? "{}";
+    try { parsed = JSON.parse(raw); } catch { parsed = { per_doc: [] }; }
 
-      const raw = response.output_text ?? (response.output?.[0]?.content?.[0]?.text) ?? "{}";
-      try { parsed = JSON.parse(raw); } catch { parsed = { per_doc: [] }; }
-    } catch (e) {
-      console.error("OpenAI error:", e?.status, e?.message, e?.response?.data || e?.response);
-      const details = e?.response?.data || e?.message || String(e);
-      return json(500, { error: "OpenAI falló en extracción", details });
-    }
-
-    // 7) Validación mínima => checklist
+    // 7) Checklist mínima
     const checklist = [];
     for (const item of (parsed.per_doc || [])) {
       const t = item.doc_type;
@@ -368,69 +259,32 @@ ${JSON.stringify(context, null, 2)}`
     const decision = anyObs ? "pendiente" : "aprobado";
     const observations = anyObs ? "Faltan campos en uno o más documentos." : "Documentación mínima OK.";
 
-    // 8) Si aprobado => generar PDF y subirlo a Storage
-    let certificate_path = null;
-    if (!anyObs) {
-      try {
-        const certPayload = {
-          empresa: profile?.full_name || profile?.email || "Exportador",
-          ruc: "—",
-          producto: lot.product,
-          variedad: lot.variety,
-          lote: lot.lot_code,
-          origen: `${lot.origin_region || "-"}, ${lot.origin_province || "-"}`,
-          destino: lot.destination_country,
-          fecha: new Date().toLocaleDateString(),
-          observaciones: observations || "",
-        };
-        const pdfBuffer = await generateCertificatePDF(certPayload);
-        const path = `${lot.user_id}/${lot.id}/cert_${Date.now()}.pdf`;
-        const { error: upErr } = await supa.storage.from("certs").upload(path, pdfBuffer, {
-          contentType: "application/pdf", upsert: true
-        });
-        if (!upErr) certificate_path = path;
-        else console.error("upload cert error:", upErr);
-      } catch (e) {
-        console.error("generate/upload cert error:", e);
-      }
-    }
-
+    // 8) Persistencia rápida (sin generar PDF aquí)
     const patch = { approved: !anyObs, status: decision, observations };
-    if (certificate_path) {
-      patch.certificate_path = certificate_path;
-      patch.validated_at = new Date().toISOString();
-      patch.reviewed_by = lot.user_id;
-    }
     await supa.from("lots").update(patch).eq("id", lotId);
-
-    // Contar uso IA
     await supa.from("profiles").update({ ia_used: (profile?.ia_used || 0) + 1 }).eq("id", lot.user_id);
-
-    // Eventos
     await supa.from("lot_events").insert({ user_id: lot.user_id, lot_id: lotId, event_type: "ai_checked", data: { per_doc: parsed.per_doc || [] } });
-    if (certificate_path) {
-      await supa.from("lot_events").insert({ user_id: lot.user_id, lot_id: lotId, event_type: "pdf_generated", data: { certificate_path } });
-    }
-
-    const stages = [
-      { step: "lectura",    label: "Lectura de documentos",       status: "done" },
-      { step: "extraccion", label: "Extracción de campos",        status: "done" },
-      { step: "validacion", label: "Validación de reglas",        status: "done" },
-      { step: "decision",   label: "Decisión del lote",           status: "done" },
-      { step: "resultado",  label: "Preparando resultado final",  status: "done" },
-    ];
 
     return json(200, {
       ok: true,
       decision,
       checklist,
-      stages,
+      stages: [
+        { step: "lectura",    label: "Lectura de documentos",       status: "done" },
+        { step: "extraccion", label: "Extracción de campos",        status: "done" },
+        { step: "validacion", label: "Validación de reglas",        status: "done" },
+        { step: "decision",   label: "Decisión del lote",           status: "done" },
+        { step: "resultado",  label: "Preparando resultado final",  status: "done" },
+      ],
       observations,
-      certificate_path
+      certificate_path: null // se genera en el front con jsPDF
     });
 
   } catch (err) {
-    console.error("validate-docs error (catch):", err?.response?.data || err?.message || err);
+    console.error("validate-docs error:", err?.response?.data || err?.message || err);
     return json(500, { error: "Error en validación IA", details: err?.response?.data || err?.message || String(err) });
+  } finally {
+    const ms = Date.now() - start;
+    console.log("[validate-docs] tiempo total:", ms, "ms");
   }
 };
