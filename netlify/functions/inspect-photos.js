@@ -1,21 +1,20 @@
 // netlify/functions/inspect-photos.js
 exports.handler = async (event) => {
   try {
-    // --- Query params (una sola vez, sin redeclarar luego) ---
+    // ---- Query params ----
     const q = event.queryStringParameters || {};
-    const lotId   = q.lot_id   || null;   // UUID del lote
-    const lotCode = q.lot_code || null;   // código humano del lote (ej. Lote-001)
+    const lotId   = q.lot_id   || null;   // UUID
+    const lotCode = q.lot_code || null;   // código humano (p.ej., Lote-001)
     const debug   = q.debug === "1";
 
-    // --- Imports dinámicos ---
+    // ---- Imports ----
     const { default: OpenAI } = await import("openai");
-    const { toFile } = await import("openai/uploads");
     const { createClient } = await import("@supabase/supabase-js");
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const supa   = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
 
-    // --- Buscar el lote: primero por id, si no por code ---
+    // ---- Buscar el lote ----
     let lot = null;
     if (lotId) {
       const { data } = await supa.from("lots").select("*").eq("id", lotId).single();
@@ -27,7 +26,7 @@ exports.handler = async (event) => {
     }
     if (!lot) return json(404, { error: "Lote no encontrado", hint: "Pasa ?lot_id=<uuid> o ?lot_code=<codigo>" });
 
-    // --- Traer fotos del lote ---
+    // ---- Traer fotos del lote ----
     const { data: photos, error: photosErr } = await supa
       .from("lot_photos")
       .select("file_path, created_at")
@@ -35,15 +34,27 @@ exports.handler = async (event) => {
       .order("created_at", { ascending: true });
 
     if (photosErr) return json(500, { error: "No se pudo listar fotos", details: photosErr.message });
-    if (!photos || photos.length === 0) return json(200, { ok: true, per_photo: [], summary: "No hay fotos en este lote." });
+    if (!photos || photos.length === 0) {
+      return json(200, { ok: true, per_photo: [], summary: "No hay fotos en este lote." });
+    }
 
-    // --- Debug temprano (sin llamar a OpenAI) ---
+    // ---- Crear URLs firmadas (las usaremos como input_image) ----
+    const images = [];
+    for (const p of photos) {
+      const { data: signed, error: signErr } = await supa.storage.from("photos").createSignedUrl(p.file_path, 300);
+      if (signErr || !signed?.signedUrl) {
+        return json(500, { error: "No se pudo firmar URL de foto", path: p.file_path, details: signErr?.message });
+      }
+      images.push({ url: signed.signedUrl, path: p.file_path });
+    }
+
+    // ---- Modo debug: ver lote, fotos y env ----
     if (debug) {
       return json(200, {
         ok: true,
         debug: {
           lot: { id: lot.id, code: lot.lot_code, product: lot.product },
-          photos: photos.map(p => p.file_path),
+          photos: images.map(i => i.path),
           env: {
             hasOPENAI: !!process.env.OPENAI_API_KEY,
             hasSERVICE_ROLE: !!process.env.SUPABASE_SERVICE_ROLE,
@@ -53,32 +64,7 @@ exports.handler = async (event) => {
       });
     }
 
-    // --- Subir fotos como input_file (manejo de errores visible) ---
-    async function uploadPhotoToOpenAI(path) {
-      const { data: signed, error: signErr } = await supa.storage.from("photos").createSignedUrl(path, 60);
-      if (signErr || !signed?.signedUrl) throw new Error("No se pudo firmar URL: " + (signErr?.message || "sin detalle"));
-
-      const resp = await fetch(signed.signedUrl);
-      if (!resp.ok) throw new Error("No se pudo descargar la foto (" + resp.status + ")");
-
-      const buf = await resp.arrayBuffer();
-      const file = await toFile(Buffer.from(buf), path.split("/").pop() || "photo.jpg", { type: "image/jpeg" });
-      const up = await openai.files.create({ file, purpose: "vision" });
-      return up.id;
-    }
-
-    const uploads = [];
-    for (const p of photos) {
-      try {
-        const fid = await uploadPhotoToOpenAI(p.file_path);
-        uploads.push({ file_id: fid, path: p.file_path });
-      } catch (e) {
-        return json(500, { error: "Fallo preparando foto: " + String(e), path: p.file_path });
-      }
-    }
-    if (uploads.length === 0) return json(200, { ok: true, per_photo: [], summary: "No se pudieron preparar las fotos." });
-
-    // --- Prompt + schema de salida ---
+    // ---- Prompt + schema ----
     const SYSTEM = `Eres un inspector de calidad para frutas frescas de exportación.
 - Identifica la fruta, evalúa madurez, detecta defectos (golpes, moho, cortes, decoloración, arrugas, desenfoque/iluminación) y decide si es apta para exportar.
 - Si hay duda (imagen borrosa/oscura), marca export_ready=false y explica.
@@ -114,7 +100,7 @@ Devuelve JSON EXACTO según el schema.`;
       }
     };
 
-    // --- Construir input para la IA ---
+    // ---- Construir input para la IA ----
     const expected = (lot.product || "").toLowerCase();
     const userContent = [{
       type: "input_text",
@@ -124,9 +110,13 @@ Producto esperado: ${lot.product || "-"}
 Para cada imagen, devuelve: product_detected, confidence (0..1), ripeness (unripe|ripe|overripe|unknown),
 issues (array), export_ready (true/false) y notes (breve).`
     }];
-    for (const up of uploads) userContent.push({ type: "input_file", file_id: up.file_id });
 
-    // --- Llamar a OpenAI (con manejo de errores visible) ---
+    // AÑADIR IMÁGENES como input_image (NO input_file)
+    for (const img of images) {
+      userContent.push({ type: "input_image", image_url: { url: img.url } });
+    }
+
+    // ---- Llamar a OpenAI (Responses API con Structured Outputs) ----
     let resp;
     try {
       resp = await openai.responses.create({
@@ -141,7 +131,7 @@ issues (array), export_ready (true/false) y notes (breve).`
       return json(500, { error: "OpenAI fallo: " + String(e) });
     }
 
-    // --- Parsear salida ---
+    // ---- Parsear salida ----
     let parsed = {};
     try {
       const raw = resp.output_text ?? (resp.output?.[0]?.content?.[0]?.text) ?? "{}";
@@ -150,11 +140,11 @@ issues (array), export_ready (true/false) y notes (breve).`
       return json(500, { error: "No pude parsear la salida de IA", raw: resp });
     }
 
-    // --- Guardar resultados en DB ---
+    // ---- Guardar en DB (lot_photo_reviews) ----
     const rows = [];
     for (let i = 0; i < parsed.per_photo.length; i++) {
       const r = parsed.per_photo[i];
-      const origin = uploads[i];
+      const origin = images[i];
       if (!origin) continue;
       rows.push({
         lot_id: lot.id,
