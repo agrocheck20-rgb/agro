@@ -181,49 +181,54 @@ exports.handler = async (event) => {
     }
 
     // 4) Preparar inputs (PDF -> input_file (purpose: vision) | imagen -> input_image)
-    const perDocInputs = [];   // [{ doc_type, inputs:[{type, image_url|file_id}] }]
-    const perDocText   = {};   // texto PDF embebido opcional
-
     for (const r of reqs) {
-      const t = r.doc_type;
-      if (!["CERT_ORIGEN","FACTURA","PACKING_LIST"].includes(t)) continue;
+  const t = r.doc_type;
+  if (!["CERT_ORIGEN","FACTURA","PACKING_LIST"].includes(t)) continue;
 
-      const rows = byType[t] || [];
-      if (rows.length === 0) { perDocInputs.push({ doc_type:t, inputs:[] }); continue; }
+  const rows = byType[t] || [];
+  if (rows.length === 0) { perDocInputs.push({ doc_type:t, inputs:[] }); continue; }
 
-      const inputs = [];
-      let concatText = "";
+  const inputs = [];
+  let concatText = "";
 
-      for (const row of rows) {
-        const ext = (row.file_path || "").toLowerCase().split(".").pop();
-        const { data: signed } = await supa.storage.from("docs").createSignedUrl(row.file_path, 300);
-        if (!signed?.signedUrl) continue;
+  for (const row of rows) {
+    // La extensión la sacamos del *path* en Storage, no del signed URL
+    const ext = (row.file_path || "").toLowerCase().split(".").pop();
 
-        if (["jpg","jpeg","png","webp","gif"].includes(ext)) {
-          inputs.push({ type: "input_image", image_url: signed.signedUrl });
-        } else if (ext === "pdf") {
-          const buf = await fetchArrayBuffer(signed.signedUrl);
-          const file = await toFile(
-            buf,
-            row.file_path.split("/").pop() || "doc.pdf",
-            { type: "application/pdf" }
-          );
-          // OJO: purpose 'vision' para que la Responses API lo use como input_file OCR
-          const up = await openai.files.create({ file, purpose: "vision" });
-          inputs.push({ type: "input_file", file_id: up.id });
+    const { data: signed } = await supa.storage.from("docs").createSignedUrl(row.file_path, 300);
+    if (!signed?.signedUrl) continue;
 
-          // (opcional) intenta extraer texto embebido
-          try { concatText += `\n[${row.file_path}]\n${await extractPdfTextFromSignedUrl(signed.signedUrl)}\n`; }
-          catch {}
-        } else {
-          // otros formatos -> intentar como imagen por URL (si es renderizable)
-          inputs.push({ type: "input_image", image_url: signed.signedUrl });
-        }
-      }
-
-      perDocInputs.push({ doc_type:t, inputs });
-      if (concatText) perDocText[t] = concatText;
+    // Si ES imagen conocida -> input_image
+    if (["jpg","jpeg","png","webp","gif"].includes(ext)) {
+      inputs.push({ type: "input_image", image_url: signed.signedUrl });
+      continue;
     }
+
+    // TODO LO DEMÁS (incluido PDF) -> input_file (purpose: "vision")
+    try {
+      const buf  = await fetchArrayBuffer(signed.signedUrl);
+      const name = row.file_path.split("/").pop() || "doc.bin";
+      // Si ext es pdf, mime pdf; si no, un genérico que igual funcionará con 'vision'
+      const mime = (ext === "pdf") ? "application/pdf" : "application/octet-stream";
+      const { toFile } = await import("openai/uploads");
+      const file = await toFile(buf, name, { type: mime });
+      const up   = await openai.files.create({ file, purpose: "vision" });
+      inputs.push({ type: "input_file", file_id: up.id });
+
+      // (opcional) extraer texto SOLO si realmente es pdf
+      if (ext === "pdf") {
+        try { concatText += `\n[${row.file_path}]\n${await extractPdfTextFromSignedUrl(signed.signedUrl)}\n`; } catch {}
+      }
+    } catch (e) {
+      // si algo falla subiendo como vision, no lo mandes como imagen; sólo registra
+      console.error("upload to vision failed:", e?.message || e);
+    }
+  }
+
+  perDocInputs.push({ doc_type:t, inputs });
+  if (concatText) perDocText[t] = concatText;
+}
+
 
     // 5) Construir input para la IA
     const context = {
