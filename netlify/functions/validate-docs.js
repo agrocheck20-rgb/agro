@@ -180,8 +180,11 @@ exports.handler = async (event) => {
       byType[t] = byType[t].slice(0,1); // toma solo 1 archivo por tipo
     }
 
-    // 4) Preparar inputs (PDF -> input_file (purpose: vision) | imagen -> input_image)
-    for (const r of reqs) {
+   // 4) Preparar evidencias por documento (PDF -> input_file (purpose: vision) | imagen -> input_image)
+const perDocInputs = [];   // [{ doc_type, inputs:[ {type, image_url|file_id} ] }]
+const perDocText   = {};   // texto OCR opcional por doc_type
+
+for (const r of reqs) {
   const t = r.doc_type;
   if (!["CERT_ORIGEN","FACTURA","PACKING_LIST"].includes(t)) continue;
 
@@ -192,35 +195,33 @@ exports.handler = async (event) => {
   let concatText = "";
 
   for (const row of rows) {
-    // La extensión la sacamos del *path* en Storage, no del signed URL
+    // usamos la extensión del path en Storage (no del signed URL)
     const ext = (row.file_path || "").toLowerCase().split(".").pop();
 
     const { data: signed } = await supa.storage.from("docs").createSignedUrl(row.file_path, 300);
     if (!signed?.signedUrl) continue;
 
-    // Si ES imagen conocida -> input_image
     if (["jpg","jpeg","png","webp","gif"].includes(ext)) {
+      // imagen => input_image
       inputs.push({ type: "input_image", image_url: signed.signedUrl });
       continue;
     }
 
-    // TODO LO DEMÁS (incluido PDF) -> input_file (purpose: "vision")
+    // TODO LO DEMÁS (pdf u otros) => input_file con purpose: "vision"
     try {
       const buf  = await fetchArrayBuffer(signed.signedUrl);
       const name = row.file_path.split("/").pop() || "doc.bin";
-      // Si ext es pdf, mime pdf; si no, un genérico que igual funcionará con 'vision'
       const mime = (ext === "pdf") ? "application/pdf" : "application/octet-stream";
-      const { toFile } = await import("openai/uploads");
+      // usa el toFile que ya importaste arriba: const { toFile } = await import("openai/uploads");
       const file = await toFile(buf, name, { type: mime });
       const up   = await openai.files.create({ file, purpose: "vision" });
       inputs.push({ type: "input_file", file_id: up.id });
 
-      // (opcional) extraer texto SOLO si realmente es pdf
+      // (opcional) extraer texto SOLO si es pdf
       if (ext === "pdf") {
         try { concatText += `\n[${row.file_path}]\n${await extractPdfTextFromSignedUrl(signed.signedUrl)}\n`; } catch {}
       }
     } catch (e) {
-      // si algo falla subiendo como vision, no lo mandes como imagen; sólo registra
       console.error("upload to vision failed:", e?.message || e);
     }
   }
@@ -229,33 +230,33 @@ exports.handler = async (event) => {
   if (concatText) perDocText[t] = concatText;
 }
 
+// 5) Construir input para la IA
+const context = {
+  lote: {
+    product: lot.product, variety: lot.variety, lot_code: lot.lot_code,
+    origin_region: lot.origin_region, origin_province: lot.origin_province,
+    destination_country: lot.destination_country,
+  },
+  requirements: reqs
+};
 
-    // 5) Construir input para la IA
-    const context = {
-      lote: {
-        product: lot.product, variety: lot.variety, lot_code: lot.lot_code,
-        origin_region: lot.origin_region, origin_province: lot.origin_province,
-        destination_country: lot.destination_country,
-      },
-      requirements: reqs
-    };
-
-    const userContent = [{
-      type: "input_text",
-      text:
+const userContent = [{
+  type: "input_text",
+  text:
 `Valida SOLO cuatro campos por documento (según SYSTEM_PROMPT) para el lote ${lot.lot_code || lot.id}.
 Contexto:
 ${JSON.stringify(context, null, 2)}`
-    }];
+}];
 
-    for (const block of perDocInputs) {
-      if (!block.inputs.length) continue;
-      userContent.push({ type: "input_text", text: `Documento: ${block.doc_type}`});
-      for (const inp of block.inputs) userContent.push(inp);
-      if (perDocText[block.doc_type]) {
-        userContent.push({ type: "input_text", text: `Texto OCR (si ayuda):\n${perDocText[block.doc_type].slice(0, 6000)}` });
-      }
-    }
+// añade inputs por cada documento
+for (const block of perDocInputs) {
+  if (!block.inputs.length) continue;
+  userContent.push({ type: "input_text", text: `Documento: ${block.doc_type}`});
+  for (const inp of block.inputs) userContent.push(inp);
+  if (perDocText[block.doc_type]) {
+    userContent.push({ type: "input_text", text: `Texto OCR (si ayuda):\n${perDocText[block.doc_type].slice(0, 6000)}` });
+  }
+}
 
     // 6) OpenAI (Structured Outputs)
     const { default: OpenAIClient } = await import("openai"); // (no imprescindible, pero mantiene consistencia ESM)
