@@ -136,45 +136,46 @@
               <label class="text-sm block mb-1">Fotos del lote (opcional)</label>
               <input type="file" id="lotPhotos" multiple accept="image/*" class="w-full" />
               <div class="mt-3 flex items-center gap-2">
-  <button id="btnRunVision" class="border rounded-xl px-4 py-2">Analizar fotos con IA</button>
-</div>
-<div id="visionResults" class="mt-3 text-sm text-slate-700"></div>
-
+                <button id="btnRunVision" class="border rounded-xl px-4 py-2">Analizar fotos con IA</button>
+              </div>
+              <div id="visionResults" class="mt-3 text-sm text-slate-700"></div>
             </div>
           </div>
-        <!-- IA Workbench: pipeline + resultados + chat -->
-<div class="grid lg:grid-cols-3 gap-6">
-  <!-- Columna izquierda: pipeline y resultados -->
-  <div class="lg:col-span-2 card">
-    <h3 class="card-title">4) Validación automática</h3>
 
-    <!-- Pipeline -->
-    <ol id="aiPipeline" class="space-y-2">
-      <!-- Se llenará dinámicamente -->
-    </ol>
+          <!-- IA Workbench: pipeline + resultados + chat -->
+          <div class="grid lg:grid-cols-3 gap-6">
+            <!-- Columna izquierda: pipeline y resultados -->
+            <div class="lg:col-span-2 card">
+              <h3 class="card-title">4) Validación automática</h3>
 
-    <!-- Chips por documento -->
-    <div id="docChips" class="flex flex-wrap gap-2 mt-3"></div>
+              <!-- Pipeline -->
+              <ol id="aiPipeline" class="space-y-2">
+                <!-- Se llenará dinámicamente -->
+              </ol>
 
-    <!-- Resultados (checklist y campos) -->
-    <div id="aiResults" class="mt-4 text-sm text-slate-700"></div>
+              <!-- Chips por documento -->
+              <div id="docChips" class="flex flex-wrap gap-2 mt-3"></div>
 
-    <div class="mt-4 flex items-center gap-2">
-      <button id="btnRunAI" class="btn btn-primary">Validar con IA ahora</button>
-      <button id="btnPDF" class="hidden border rounded-xl px-4 py-2">Descargar constancia PDF</button>
-    </div>
-  </div>
+              <!-- Resultados (checklist y campos) -->
+              <div id="aiResults" class="mt-4 text-sm text-slate-700"></div>
 
-  <!-- Columna derecha: chat IA -->
-  <div class="card">
-    <h3 class="card-title">Asistente</h3>
-    <div id="aiChat" class="h-72 overflow-auto border rounded-lg p-2 bg-slate-50 text-sm"></div>
-    <div class="flex mt-2 gap-2">
-      <input id="aiChatInput" class="flex-1 px-3 py-2 border rounded-lg text-sm" placeholder="Pregunta algo...">
-      <button id="aiChatSend" class="px-3 py-2 border rounded-lg text-sm">Enviar</button>
-    </div>
-  </div>
-</div>
+              <div class="mt-4 flex items-center gap-2">
+                <button id="btnRunAI" class="btn btn-primary">Validar con IA ahora</button>
+                <!-- botón inline renombrado para evitar duplicado de ID -->
+                <button id="btnPDFInline" class="hidden border rounded-xl px-4 py-2">Descargar constancia PDF</button>
+              </div>
+            </div>
+
+            <!-- Columna derecha: chat IA -->
+            <div class="card">
+              <h3 class="card-title">Asistente</h3>
+              <div id="aiChat" class="h-72 overflow-auto border rounded-lg p-2 bg-slate-50 text-sm"></div>
+              <div class="flex mt-2 gap-2">
+                <input id="aiChatInput" class="flex-1 px-3 py-2 border rounded-lg text-sm" placeholder="Pregunta algo...">
+                <button id="aiChatSend" class="px-3 py-2 border rounded-lg text-sm">Enviar</button>
+              </div>
+            </div>
+          </div>
 
           <div class="card">
             <h3 class="card-title">3) Asistente IA</h3>
@@ -205,6 +206,7 @@
             </div>
             <div class="flex items-center gap-3 mt-4">
               <button id="btnSaveResult" class="bg-emerald-600 text-white rounded-xl px-4 py-2">Guardar resultado + generar PDF</button>
+              <!-- este botón mantiene el id original -->
               <button id="btnPDF" class="hidden border rounded-xl px-4 py-2">Descargar constancia PDF</button>
             </div>
           </div>
@@ -271,11 +273,12 @@
     </div>
   </div>
 
+  <!-- Scripts: orden correcto + bust de caché -->
   <script src="assets/js/env.js?v=7"></script>
-<script src="assets/js/supabaseClient.js?v=7"></script>
-<script src="assets/js/certificate.js?v=7"></script>
-<script src="assets/js/app.js?v=7"></script>
-
+  <script src="assets/js/supabaseClient.js?v=7"></script>
+  <script src="assets/js/certificate.js?v=7"></script>
+  <script src="assets/js/app.js?v=7"></script>
 </body>
 </html>
+
 
