@@ -581,12 +581,12 @@ $("#btnSaveResult").addEventListener("click", async ()=>{
 });
 
 // Botón PDF inline en Validación IA
-$("#btnPDF").addEventListener("click", async ()=>{
-  // Descarga el PDF almacenado si existe
+document.getElementById("btnPDF")?.addEventListener("click", async ()=>{
   const { data: lot } = await sb.from("lots").select("*").eq("id", state.currentLotId).single();
   if(!lot?.certificate_path) return toast("No hay certificado aún", false);
   await downloadCertificateFromStorage(lot.certificate_path);
 });
+
 
 // Descarga del PDF desde Storage (signed URL)
 async function downloadCertificateFromStorage(path){
@@ -597,21 +597,95 @@ async function downloadCertificateFromStorage(path){
 
 // ===== Dashboard
 async function renderDashboard(){
+  // Trae o reutiliza lotes
   const lots = state.lotsCache?.length ? state.lotsCache : (await sb.from("lots").select("*")).data || [];
+
+  // KPIs
   const total = lots.length;
   const approved = lots.filter(l=>l.status==='aprobado').length;
-  const pending = lots.filter(l=>l.status==='pendiente' || (!l.status)).length;
+  const pending  = lots.filter(l=>l.status==='pendiente' || (!l.status)).length;
   const rejected = lots.filter(l=>l.status==='rechazado').length;
-  $("#statTotal").textContent=total; $("#statApproved").textContent=approved; $("#statPending").textContent=pending; $("#statRejected").textContent=rejected;
 
-  const ctx=document.getElementById("chartStatus");
-  if(ctx){
-    if(window._statusChart) window._statusChart.destroy();
-    window._statusChart=new Chart(ctx,{ type:"doughnut", data:{ labels:["Aprobados","Pendientes","Rechazados"], datasets:[{ data:[approved,pending,rejected] }] }, options:{ plugins:{legend:{position:"bottom"}} } });
+  $("#statTotal").textContent = total;
+  $("#statApproved").textContent = approved;
+  $("#statPending").textContent = pending;
+  $("#statRejected").textContent = rejected;
+
+  // Donut de estatus
+  const ctx1 = document.getElementById("chartStatus");
+  if (ctx1) {
+    if (window._statusChart) window._statusChart.destroy();
+    window._statusChart = new Chart(ctx1, {
+      type: "doughnut",
+      data: {
+        labels: ["Aprobados","Pendientes","Rechazados"],
+        datasets: [{ data: [approved, pending, rejected] }]
+      },
+      options: { plugins:{ legend:{ position:"bottom" } } }
+    });
   }
-  const used=state.profile?.ia_used||0, quota=state.profile?.ia_quota||0; const pct = quota? Math.min(100, Math.round(used*100/quota)):0;
-  $("#usageBar").style.width=pct+"%"; $("#usageText").textContent = `${used} / ${quota} (${pct}%)`;
+
+  // Uso de IA
+  const used = state.profile?.ia_used || 0;
+  const quota = state.profile?.ia_quota || 0;
+  const pct = quota ? Math.min(100, Math.round(used * 100 / quota)) : 0;
+  $("#usageBar").style.width = pct + "%";
+  $("#usageText").textContent = `${used} / ${quota} (${pct}%)`;
+
+  // ====== NUEVOS GRÁFICOS ======
+
+  // Top productos
+  const countBy = (arr, key) => {
+    const map = new Map();
+    for (const it of arr) {
+      const k = (it[key] || "-").toString();
+      map.set(k, (map.get(k) || 0) + 1);
+    }
+    return Array.from(map.entries()).sort((a,b)=>b[1]-a[1]).slice(0,7); // top 7
+  };
+
+  const topProducts = countBy(lots, "product");
+  const prodLabels = topProducts.map(([k])=>k);
+  const prodData   = topProducts.map(([,v])=>v);
+
+  const ctx2 = document.getElementById("chartByProduct");
+  if (ctx2) {
+    if (window._byProductChart) window._byProductChart.destroy();
+    window._byProductChart = new Chart(ctx2, {
+      type: "bar",
+      data: {
+        labels: prodLabels,
+        datasets: [{ label: "# de lotes", data: prodData }]
+      },
+      options: {
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, ticks: { precision:0 } } }
+      }
+    });
+  }
+
+  // Top destinos (país)
+  const topCountries = countBy(lots, "destination_country");
+  const countryLabels = topCountries.map(([k])=>k);
+  const countryData   = topCountries.map(([,v])=>v);
+
+  const ctx3 = document.getElementById("chartByCountry");
+  if (ctx3) {
+    if (window._byCountryChart) window._byCountryChart.destroy();
+    window._byCountryChart = new Chart(ctx3, {
+      type: "bar",
+      data: {
+        labels: countryLabels,
+        datasets: [{ label: "# de lotes", data: countryData }]
+      },
+      options: {
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, ticks: { precision:0 } } }
+      }
+    });
+  }
 }
+
 
 // ===== Mi cuenta
 $("#btnUpdateProfile").addEventListener("click", async ()=>{
